@@ -1,0 +1,19 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is .gitignored.
+
+hcloud_token   = "hetzner-api-token"
+aws_region     = "sa-east-1"
+ssh_public_key = "ssh-ed25519 AAAA... arthur@laptop"
+repo_url       = "https://github.com/<you>/ZapAgent.git"
+git_ref        = "main"
+domain_name    = "dev.zapagent.com.br"
+
+env_blob = <<EOT
+ENVIRONMENT=development
+ANTHROPIC_API_KEY=sk-...
+EVOLUTION_API_KEY=...
+EOT
+
+app_secrets = {
+  ANTHROPIC_API_KEY = "sk-..."
+  EVOLUTION_API_KEY = "..."
+}

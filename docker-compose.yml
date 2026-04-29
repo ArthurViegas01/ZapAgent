@@ -1,0 +1,128 @@
+# ZapAgent — local development stack.
+# Spins up: postgres (with pgvector), redis, evolution-api, fastapi, celery worker.
+# Production deployments use the Terraform stack in infra/terraform.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: zapagent-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-zapagent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-zapagent_local_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-zapagent}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/migrations:/migrations:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-zapagent}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: zapagent-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  evolution:
+    image: atendai/evolution-api:v2.1.1
+    container_name: zapagent-evolution
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      SERVER_TYPE: http
+      SERVER_PORT: 8080
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:-change-me-in-env}
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://${POSTGRES_USER:-zapagent}:${POSTGRES_PASSWORD:-zapagent_local_dev}@postgres:5432/evolution
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://redis:6379/3
+      CACHE_REDIS_PREFIX_KEY: evolution
+      WEBHOOK_GLOBAL_URL: http://api:8000/webhooks/whatsapp
+      WEBHOOK_GLOBAL_ENABLED: "true"
+    ports:
+      - "8080:8080"
+    volumes:
+      - evolution_instances:/evolution/instances
+      - evolution_store:/evolution/store
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+      target: dev
+    container_name: zapagent-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # Override host names for in-network access regardless of .env values.
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+      EVOLUTION_API_URL: http://evolution:8080
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./apps/api:/app
+      - api_venv:/app/.venv
+    command: >
+      uvicorn src.main:app
+      --host 0.0.0.0
+      --port 8000
+      --reload
+      --reload-dir /app/src
+
+  worker:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+      target: dev
+    container_name: zapagent-worker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+      EVOLUTION_API_URL: http://evolution:8080
+    volumes:
+      - ./apps/api:/app
+      - api_venv:/app/.venv
+    command: >
+      celery -A src.worker.celery_app worker
+      --loglevel=INFO
+      --concurrency=2
+
+volumes:
+  postgres_data:
+  redis_data:
+  evolution_instances:
+  evolution_store:
+  api_venv:

@@ -1,0 +1,3 @@
+{
+  "tests/agent/test_graph.py::test_graph_scheduling_routes_to_schedule_node": true
+}
