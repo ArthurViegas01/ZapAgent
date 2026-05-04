@@ -1,0 +1,24 @@
+# Copy this to terraform.tfvars and fill in your values.
+# Never commit terraform.tfvars — it is gitignored.
+
+railway_token = "your-railway-api-token"
+github_repo   = "your-github-username/zapagent"
+deploy_branch = "main"
+
+# Supabase (Settings → Database → Connection string → URI)
+supabase_url              = "https://oodfxbrbawcnromvhjga.supabase.co"
+supabase_anon_key         = "sb_publishable_..."
+supabase_service_role_key = "sb_secret_..."
+supabase_db_url           = "postgresql://postgres.oodfxbrbawcnromvhjga:PASSWORD@aws-0-sa-east-1.pooler.supabase.com:5432/postgres"
+
+# AI
+anthropic_api_key = "sk-ant-..."
+voyage_api_key    = "pa-..."
+
+# Evolution — pick a strong random string
+evolution_api_key = "change-me-to-a-strong-secret"
+
+# Google OAuth
+google_oauth_client_id     = "799398426606-ctl50b2tub6oibparsu18hqvj59616pg.apps.googleusercontent.com"
+google_oauth_client_secret = "GOCSPX-..."
+google_oauth_redirect_uri  = "https://your-site.netlify.app/auth/google-calendar/callback"

@@ -1,10 +1,10 @@
 """Celery application factory.
 
-Keeps broker/backend configuration in one place. Tasks are discovered
-automatically from src.worker.tasks when the worker process starts.
-
 Usage (local dev via docker compose):
     celery -A src.worker.celery_app worker --loglevel=INFO --concurrency=2
+
+Beat scheduler (LGPD retention job):
+    celery -A src.worker.celery_app beat --loglevel=INFO
 """
 
 from __future__ import annotations
@@ -28,8 +28,13 @@ app.conf.update(
     result_serializer="json",
     timezone="UTC",
     enable_utc=True,
-    # Prevent tasks from being acked before they finish (safer default).
     task_acks_late=True,
-    # Do not pre-fetch more than one task per worker process.
     worker_prefetch_multiplier=1,
+    beat_schedule={
+        "lgpd-retention-nightly": {
+            "task": "tasks.purge_old_messages",
+            "schedule": 86400,
+            "options": {"expires": 3600},
+        },
+    },
 )

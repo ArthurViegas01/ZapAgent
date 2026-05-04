@@ -1,0 +1,17 @@
+[build]
+  base    = "apps/web"
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# Next.js on Netlify requires the Next.js Runtime plugin.
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+# Redirect all unmatched routes to Next.js (handled by plugin, but explicit here).
+[[redirects]]
+  from   = "/*"
+  to     = "/.netlify/functions/___netlify-handler"
+  status = 200

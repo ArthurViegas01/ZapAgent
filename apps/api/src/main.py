@@ -1,8 +1,4 @@
-"""FastAPI application factory.
-
-The factory pattern keeps tests honest: each test that needs a fresh app
-constructs it with overridden dependencies via `app.dependency_overrides`.
-"""
+"""FastAPI application factory."""
 
 from __future__ import annotations
 
@@ -20,12 +16,24 @@ logger = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Startup/shutdown hooks. DB pool init goes here when wired up."""
     configure_logging()
-    logger.info("api.startup", environment=get_settings().environment)
+    settings = get_settings()
+    logger.info("api.startup", environment=settings.environment)
+
+    app.state.db_pool = None
+    if settings.database_url_sync:
+        try:
+            from .db.pool import create_pool
+            app.state.db_pool = await create_pool()
+        except Exception as exc:
+            logger.warning("api.db_pool.failed", error=str(exc))
+
     try:
         yield
     finally:
+        if app.state.db_pool is not None:
+            await app.state.db_pool.close()
+            logger.info("api.db_pool.closed")
         logger.info("api.shutdown")
 
 
@@ -39,22 +47,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
 
-    # CORS: in production this list is tightened to the dashboard domain.
+    origins = ["*"] if not settings.is_production else []
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"] if not settings.is_production else [],
+        allow_origins=origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
+    from .core.rate_limit import RateLimitMiddleware  # noqa: PLC0415
+    app.add_middleware(RateLimitMiddleware, redis_url=str(settings.redis_url))
+
     @app.get("/health", tags=["meta"])
     async def health() -> dict[str, str]:
         return {"status": "ok", "version": app.version}
 
-    # Routers — wired up as we build them.
-    # from .api.webhooks.whatsapp import router as whatsapp_router
-    # app.include_router(whatsapp_router, prefix="/webhooks")
+    from .api.webhooks.whatsapp import router as whatsapp_router
+    app.include_router(whatsapp_router, prefix="/webhooks")
+
+    # REST API v1 — tenant-scoped resources
+    from .api.v1.routers.tenants import router as tenants_router
+    from .api.v1.routers.faq import router as faq_router
+    from .api.v1.routers.conversations import router as conversations_router
+    from .api.v1.routers.integrations import router as integrations_router
+    app.include_router(tenants_router, prefix="/api")
+    app.include_router(faq_router, prefix="/api")
+    app.include_router(conversations_router, prefix="/api")
+    app.include_router(integrations_router, prefix="/api")
 
     return app
 

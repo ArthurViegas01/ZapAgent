@@ -5,7 +5,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-const PUBLIC_PATHS = ["/login", "/signup", "/api/health"];
+const PUBLIC_PATHS = ["/login", "/signup", "/auth/callback", "/auth/google-calendar", "/onboarding", "/api/health", "/"];
 
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({ request });
@@ -44,6 +44,8 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
+  // Inject current pathname so Server Components can read it for active-nav highlighting.
+  response.headers.set("x-pathname", request.nextUrl.pathname);
   return response;
 }
 

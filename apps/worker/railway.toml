@@ -1,0 +1,9 @@
+[build]
+builder = "dockerfile"
+dockerfilePath = "../api/Dockerfile"
+dockerBuildTarget = "prod"
+
+[deploy]
+startCommand = "celery -A src.worker.celery_app worker --loglevel=INFO --concurrency=2"
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3

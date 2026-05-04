@@ -44,7 +44,7 @@ def check_confidence(state: AgentState) -> dict[str, object]:
         # Opt-out is always handled (no LLM, no scheduling), but we route
         # to respond so the worker can persist the opt-out and stop replying.
         next_action = "respond"
-    elif intent == Intent.SCHEDULING and confidence >= threshold:
+    elif intent == Intent.SCHEDULING and confidence >= threshold and state.get("appointment"):
         next_action = "schedule"
     elif confidence < threshold:
         next_action = "handoff"
