@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 
 import { createWhatsappInstance, disconnectWhatsapp, pollWhatsappStatus, startGoogleCalendarOAuth, disconnectGoogleCalendar } from "./actions";
 
@@ -23,6 +23,8 @@ export default function IntegrationsPage({ params }: Props) {
   const [error, setError] = useState("");
   const [isPending, startTransition] = useTransition();
   const [polling, setPolling] = useState(false);
+  const pollCountRef = useRef(0);
+  const MAX_POLLS = 30; // ~2 minutes at 4s interval
   const [gcalStatus, setGcalStatus] = useState<"unknown" | "connected" | "revoked">("unknown");
   const [gcalEmail, setGcalEmail] = useState("");
   const [gcalPending, setGcalPending] = useState(false);
@@ -45,7 +47,10 @@ export default function IntegrationsPage({ params }: Props) {
         if (data.integration?.status === "pending" && data.integration?.config?.qrcode) {
           setQrcode(data.integration.config.qrcode);
           setInstanceName(data.integration.external_id ?? "");
+          pollCountRef.current = 0;
           setPolling(true);
+        } else if (data.integration?.status === "error") {
+          setError("Não foi possível gerar o QR Code. Clique em Tentar novamente.");
         }
       }
     }
@@ -57,10 +62,20 @@ export default function IntegrationsPage({ params }: Props) {
     if (!polling || !tenantId) return;
     const id = setInterval(async () => {
       const data = await pollWhatsappStatus(tenantId);
+      pollCountRef.current += 1;
+
       if (data.status === "connected") {
         setIntegration((p) => p ? { ...p, status: "connected" } : null);
         setQrcode("");
         setPolling(false);
+      } else if (data.status === "error") {
+        setIntegration((p) => p ? { ...p, status: "error" } : null);
+        setQrcode("");
+        setPolling(false);
+        setError("Não foi possível gerar o QR Code. Tente novamente.");
+      } else if (pollCountRef.current >= MAX_POLLS) {
+        setPolling(false);
+        setError("Tempo esgotado ao aguardar o QR Code. Tente novamente.");
       } else if (data.qrcode) {
         setQrcode(data.qrcode);
       }
@@ -70,6 +85,8 @@ export default function IntegrationsPage({ params }: Props) {
 
   function handleConnect() {
     setError("");
+    pollCountRef.current = 0;
+    setIntegration((p) => p ? { ...p, status: "pending" } : p);
     startTransition(async () => {
       const res = await createWhatsappInstance(tenantId, tenantSlug);
       if ("error" in res && res.error) { setError(res.error); return; }
@@ -105,6 +122,7 @@ export default function IntegrationsPage({ params }: Props) {
 
   const isConnected = integration?.status === "connected";
   const isPending2 = integration?.status === "pending";
+  const isError = integration?.status === "error" || (!polling && !isConnected && !!error);
 
   return (
     <div className="flex flex-col gap-6">
@@ -202,7 +220,7 @@ export default function IntegrationsPage({ params }: Props) {
               disabled={isPending || !tenantId}
               className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
             >
-              {isPending ? "Aguarde…" : "Conectar WhatsApp"}
+              {isPending ? "Aguarde…" : isError ? "Tentar novamente" : "Conectar WhatsApp"}
             </button>
           )}
           {(isConnected || qrcode || polling) && (

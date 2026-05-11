@@ -52,10 +52,14 @@ export async function middleware(request: NextRequest) {
 export const config = {
   matcher: [
     /*
-     * Match all request paths except for the ones starting with:
+     * Match all request paths except:
      * - _next/static, _next/image (Next internals)
-     * - favicon.ico, robots.txt, sitemap.xml
+     * - any path with a file extension (favicon.ico, robots.txt, *.png, *.svg, *.js, ...)
+     *
+     * The extension check stops the auth flow from running for browser
+     * asset requests, which were getting redirected through the dynamic
+     * [tenantSlug] route and crashing Next's dev-mode error boundary.
      */
-    "/((?!_next/static|_next/image|favicon.ico|robots.txt|sitemap.xml).*)",
+    "/((?!_next/static|_next/image|.*\\..*).*)",
   ],
 };

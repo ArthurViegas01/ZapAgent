@@ -117,6 +117,46 @@ margin is queryable.
   the agent stops replying for that contact.
 - Audit log in `webhook_events` for each inbound/outbound message.
 
+### 2.9. WhatsApp provider abstraction (port + adapters)
+
+The agent pipeline never imports a vendor-specific WhatsApp client. It
+depends on the `WhatsAppProvider` interface in
+`apps/api/src/integrations/whatsapp/base.py`. Concrete adapters live in
+the same package:
+
+| Adapter          | When to use                                     |
+|------------------|-------------------------------------------------|
+| `EvolutionProvider` | Production with self-hosted Evolution API    |
+| `StubProvider`      | Local dev / E2E tests / demos (no network)   |
+
+**Why a port + adapters and not a feature flag inside the route handlers**
+
+1. **Testability.** With Stub we run the full pipeline -- webhook ingest,
+   dedup, agent graph, outbound send -- without any external dependency.
+2. **Vendor risk.** Evolution API depends on Baileys, which depends on
+   WhatsApp's reverse-engineered protocol. If an account gets banned,
+   if Evolution has an outage, or if we want to migrate to the official
+   Meta WhatsApp Cloud API, the swap is one new file + one env-var flip.
+3. **Webhook auth model.** We migrated from the Evolution global `apikey`
+   header (admin-level) to a per-instance `token` header (least
+   privilege) by adding `verify_webhook_auth` to the interface and
+   keeping the choice provider-local.
+
+Switch via `WHATSAPP_PROVIDER` (settings.py validates the literal):
+
+```bash
+WHATSAPP_PROVIDER=evolution  # default
+WHATSAPP_PROVIDER=stub       # for `make demo` and CI
+```
+
+A new provider plugs in by:
+
+1. Subclassing `WhatsAppProvider`, implementing every abstract method.
+2. Registering it in `factory.py`.
+3. Adding the literal to `settings.whatsapp_provider`.
+
+No router or worker code changes.
+
 ## 3. Components
 
 | Component       | Tech                                    | Where        |
@@ -126,7 +166,8 @@ margin is queryable.
 | Worker          | Celery (Redis broker)                   | Hetzner VPS  |
 | Agent           | LangGraph + PostgresSaver               | inside API   |
 | LLM             | Claude Haiku via Anthropic API          | external     |
-| WhatsApp        | Evolution API (self-hosted)             | Hetzner VPS  |
+| WhatsApp port   | `WhatsAppProvider` interface + factory  | inside API   |
+| WhatsApp impl   | Evolution API (prod) / Stub (dev/tests) | Hetzner VPS  |
 | Database        | Supabase Postgres + pgvector            | Supabase     |
 | Auth/Storage    | Supabase                                | Supabase     |
 | Payments        | Asaas                                   | external     |

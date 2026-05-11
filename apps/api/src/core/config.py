@@ -62,10 +62,24 @@ class Settings(BaseSettings):
     voyage_api_key: str = ""
     voyage_model: str = "voyage-3-lite"
 
-    # -- Evolution API ----------------------------------------------------
+    # -- WhatsApp provider ------------------------------------------------
+    # The system talks to WhatsApp through a pluggable provider. Switch
+    # implementations by setting WHATSAPP_PROVIDER in the environment:
+    #
+    #   evolution  - self-hosted Evolution API v2 (Baileys, no Chrome)
+    #   stub       - in-memory provider for E2E tests / demos
+    #                (no real WhatsApp account; QR + send_text are mocked)
+    #
+    # New providers (wppconnect, meta_cloud, twilio, z-api) plug in by
+    # adding a class to apps/api/src/integrations/whatsapp/ and wiring
+    # the factory.
+    whatsapp_provider: Literal["evolution", "stub"] = "evolution"
+
+    # -- Evolution API (when whatsapp_provider == "evolution") -----------
     evolution_api_url: str = "http://evolution:8080"
-    evolution_api_key: str = ""
-    evolution_webhook_secret: str = ""
+    evolution_api_key: str = "changeme"
+    evolution_webhook_token: str = "changeme"
+    evolution_webhook_base_url: str = "http://api:8000/webhooks/whatsapp"
 
     # -- Google Calendar --------------------------------------------------
     google_oauth_client_id: str = ""

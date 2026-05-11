@@ -49,6 +49,25 @@ make web-dev      # Next.js dev server on :3000
 
 The API listens on `:8000`, the dashboard on `:3000`, Evolution on `:8080`.
 
+### Don't have an Evolution API key yet?
+
+Set `WHATSAPP_PROVIDER=stub` in `.env` and skip the evolution container.
+The `StubProvider` mocks every external WhatsApp call -- you can develop,
+test, and demo the entire pipeline without a real WhatsApp account:
+
+```bash
+echo "WHATSAPP_PROVIDER=stub" >> .env
+make up-stub        # postgres + redis + api + worker (no evolution)
+make migrate
+make seed           # demo tenant + FAQ rows
+make demo           # runs an end-to-end conversation through the stub
+```
+
+When you do get the gateway working, flip `WHATSAPP_PROVIDER=evolution`
+and restart -- no other code changes needed. See
+[`ARCHITECTURE.md` §2.9](./ARCHITECTURE.md#29-whatsapp-provider-abstraction-port--adapters)
+for the rationale.
+
 ## Tests
 
 ```bash

@@ -15,8 +15,25 @@ def test_high_score_routes_to_respond(state_with_match: AgentState) -> None:
 
 def test_scheduling_with_high_score_routes_to_schedule(state_with_match: AgentState) -> None:
     state_with_match["intent"] = Intent.SCHEDULING
+    state_with_match["appointment"] = {
+        "title": "Atendimento",
+        "starts_at": "2026-05-10T10:00:00-03:00",
+        "ends_at": "2026-05-10T10:30:00-03:00",
+    }
     diff = check_confidence(state_with_match)
     assert diff["next_action"] == "schedule"
+
+
+def test_scheduling_without_appointment_falls_through_to_respond(
+    state_with_match: AgentState,
+) -> None:
+    """Scheduling intent without slot extraction must NOT silently book a
+    placeholder appointment -- let the LLM ask for the missing slot instead.
+    """
+    state_with_match["intent"] = Intent.SCHEDULING
+    # No "appointment" key -- generate_response did not extract a slot.
+    diff = check_confidence(state_with_match)
+    assert diff["next_action"] == "respond"
 
 
 def test_low_confidence_routes_to_handoff(base_state: AgentState) -> None:

@@ -6,8 +6,6 @@ import asyncio
 import json
 from typing import Any
 
-import httpx
-
 from src.core.config import get_settings
 from src.core.logging import get_logger
 
@@ -27,7 +25,14 @@ async def _load_tenant_settings(pool: Any, tenant_id: str) -> dict[str, Any]:
             )
         if not row:
             return {}
-        s = row["settings"] or {}
+        raw = row["settings"] or {}
+        # asyncpg returns json columns as strings; jsonb columns come back as dicts.
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except (json.JSONDecodeError, ValueError):
+                raw = {}
+        s: dict[str, Any] = raw if isinstance(raw, dict) else {}
         hours = s.get("business_hours")
         if hours:
             bh = f"Segunda a sexta, {hours.get('open','09:00')} as {hours.get('close','18:00')}."
@@ -105,12 +110,22 @@ async def _run_agent(
 
 
 async def _send_whatsapp_reply(instance_name: str, contact_phone: str, text: str) -> None:
-    url = f"{settings.evolution_api_url}/message/sendText/{instance_name}"
-    headers = {"apikey": settings.evolution_api_key, "Content-Type": "application/json"}
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.post(url, json={"number": contact_phone, "text": text}, headers=headers)
-        resp.raise_for_status()
-    logger.info("worker.reply_sent", instance=instance_name, phone=contact_phone)
+    """Sends an outbound WhatsApp text via the configured provider.
+
+    Provider is resolved from ``settings.whatsapp_provider`` (evolution | stub).
+    Stub mode short-circuits the network call and writes to a debug log so
+    end-to-end tests can run without an Evolution / WPP / Cloud API account.
+    """
+    from src.integrations.whatsapp.factory import get_whatsapp_provider  # noqa: PLC0415
+
+    provider = get_whatsapp_provider()
+    await provider.send_text(instance_name=instance_name, phone=contact_phone, text=text)
+    logger.info(
+        "worker.reply_sent",
+        instance=instance_name,
+        phone=contact_phone,
+        provider=provider.name,
+    )
 
 
 async def _persist_outbound(pool: Any, tenant_id: str, conversation_id: str, content: str, final_state: dict) -> None:
@@ -188,7 +203,7 @@ def process_whatsapp_message(
         if final_state.get("intent") == _Intent.OPT_OUT:
             await _mark_opted_out(pool, tenant_id, conversation_id)
 
-        if instance_name and settings.evolution_api_key and response_text:
+        if instance_name and response_text:
             try:
                 await _send_whatsapp_reply(instance_name, contact_phone, response_text)
             except Exception as exc:  # noqa: BLE001
@@ -212,4 +227,10 @@ def process_whatsapp_message(
         return result
     except Exception as exc:
         logger.error("worker.task.error", error=str(exc))
+        # Don't retry permanent API errors (billing / auth) — retrying won't fix them
+        # and causes cascading asyncpg connection issues in the worker.
+        error_msg = str(exc).lower()
+        if any(k in error_msg for k in ("credit balance", "too low", "invalid_api_key", "authentication")):
+            logger.error("worker.task.permanent_error", reason="billing_or_auth", error=str(exc))
+            return {"conversation_id": conversation_id, "error": str(exc), "permanent": True}
         raise self.retry(exc=exc)

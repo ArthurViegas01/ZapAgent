@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { headers } from "next/headers";
+import { notFound } from "next/navigation";
 
 import { requireTenant } from "@/lib/tenant";
 import { createClient } from "@/lib/supabase/server";
@@ -61,6 +62,12 @@ export default async function TenantLayout({
   children: React.ReactNode;
   params: { tenantSlug: string };
 }) {
+  // Avoid hitting Supabase when a static asset accidentally falls through
+  // to this dynamic route (favicon.ico, robots.txt, sw.js, ...). Tenant
+  // slugs never contain dots in practice; treating dotted paths as 404
+  // also stops Next's dev-mode error boundary from crashing on usePathname.
+  if (params.tenantSlug.includes(".")) notFound();
+
   const tenant = await requireTenant(params.tenantSlug);
   const supabase = createClient();
   const { data: { user } } = await supabase.auth.getUser();

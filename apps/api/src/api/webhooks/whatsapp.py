@@ -1,18 +1,14 @@
-"""Webhook receiver for Evolution API v2 WhatsApp events.
+"""WhatsApp webhook receiver -- provider-agnostic.
 
-Evolution sends every event to WEBHOOK_GLOBAL_URL (configured as
-http://api:8000/webhooks/whatsapp in docker-compose). Keep
-WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS=false so all events hit this path; per-event
-URLs (e.g. …/connection-update) are not implemented here. This router:
+This handler talks to a WhatsAppProvider (Evolution, Stub, ...) to:
 
-  1. Validates the request via the Evolution API key header.
-  2. Filters to only inbound text messages (messages.upsert, fromMe=false).
-  3. Writes an idempotency record to webhook_events — duplicate retries are
-     silently accepted (HTTP 200) without re-enqueuing.
-  4. Resolves the tenant from the Evolution instance name stored in integrations.
-  5. Upserts the conversation row and persists the inbound message.
-  6. Enqueues process_whatsapp_message via Celery.
-  7. Returns HTTP 200 immediately so Evolution does not retry.
+  * verify webhook authenticity
+  * classify the event (QR / connection / inbound message)
+  * normalize the payload into a uniform shape
+
+The DB-side bookkeeping (idempotency, tenant resolution, conversation
+upsert, message persistence, Celery dispatch) is provider-agnostic and
+lives below.
 """
 
 from __future__ import annotations
@@ -25,8 +21,8 @@ from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
 from src.core.config import get_settings
-from src.core.evolution_qr import evolution_qr_diagnose, evolution_qr_to_data_url
 from src.core.logging import get_logger
+from src.integrations.whatsapp import get_whatsapp_provider
 from src.worker.tasks import process_whatsapp_message
 
 logger = get_logger(__name__)
@@ -35,26 +31,7 @@ settings = get_settings()
 
 
 # ---------------------------------------------------------------------------
-# Payload helpers
-# ---------------------------------------------------------------------------
-
-def _extract_text(data: dict[str, Any]) -> str | None:
-    """Pull plain text from the many message sub-types Evolution sends."""
-    msg = data.get("message") or {}
-    return (
-        msg.get("conversation")
-        or msg.get("extendedTextMessage", {}).get("text")
-        or None
-    )
-
-
-def _phone_from_jid(jid: str) -> str:
-    """Strip @s.whatsapp.net / @g.us suffix → E.164-ish digits."""
-    return jid.split("@")[0]
-
-
-# ---------------------------------------------------------------------------
-# DB helpers (run inside the request, pool from app.state)
+# DB helpers
 # ---------------------------------------------------------------------------
 
 async def _record_webhook_event(
@@ -65,7 +42,7 @@ async def _record_webhook_event(
     payload: dict,
     tenant_id: str | None,
 ) -> bool:
-    """Insert webhook_events row. Returns False if already exists (duplicate)."""
+    """Insert webhook_events row. Returns False on duplicate."""
     try:
         await conn.execute(
             """
@@ -85,14 +62,14 @@ async def _record_webhook_event(
 
 
 async def _resolve_tenant(conn: asyncpg.Connection, instance_name: str) -> str | None:
-    """Return tenant_id for a connected Evolution instance, or None."""
+    """Return tenant_id for a non-revoked WhatsApp instance, or None."""
     row = await conn.fetchrow(
         """
         SELECT tenant_id::text
         FROM   integrations
         WHERE  kind        = 'whatsapp'
           AND  external_id = $1
-          AND  status      = 'connected'
+          AND  status      != 'revoked'
         LIMIT 1
         """,
         instance_name,
@@ -103,7 +80,6 @@ async def _resolve_tenant(conn: asyncpg.Connection, instance_name: str) -> str |
 async def _upsert_conversation(
     conn: asyncpg.Connection, tenant_id: str, contact_phone: str, contact_name: str | None
 ) -> str:
-    """Upsert conversation and return its UUID."""
     row = await conn.fetchrow(
         """
         INSERT INTO conversations (tenant_id, contact_phone, contact_name, last_message_at)
@@ -141,82 +117,71 @@ async def _insert_inbound_message(
     )
 
 
+def _classify_messages_skip_reason(body: dict[str, Any]) -> str:
+    """When parse_inbound_message returns None, figure out what to report.
+
+    Provider-shape-aware heuristic so we can keep telling the platform
+    whether the message was outbound, sticker-only, etc.
+    """
+    data = body.get("data", {}) if isinstance(body, dict) else {}
+    if not isinstance(data, dict):
+        return "invalid_data"
+    key = data.get("key") or {}
+    if isinstance(key, dict) and key.get("fromMe"):
+        return "outbound"
+    return "no_text"
+
+
 # ---------------------------------------------------------------------------
 # Route
 # ---------------------------------------------------------------------------
 
 @router.post("/whatsapp")
-async def receive_whatsapp_event(request: Request) -> JSONResponse:
-    """Handle inbound Evolution API webhook events."""
+@router.post("/whatsapp/{event_path:path}")
+async def receive_whatsapp_event(request: Request, event_path: str = "") -> JSONResponse:
+    """Handle inbound WhatsApp provider events.
 
+    Response shapes (kept stable for partner retries):
+      200 {"ok": True}                                 -- QR / connection accepted
+      200 {"ok": True, "skipped": "<reason>"}          -- event ignored
+      200 {"ok": True, "duplicate": True}              -- replay
+      200 {"ok": True, "tenant": None}                 -- unknown instance
+      200 {"ok": True, "queued": True}                 -- handed to worker
+      400                                              -- invalid JSON
+      401                                              -- bad webhook token
+    """
     pool = getattr(request.app.state, "db_pool", None)
-    path = request.url.path
+    provider = get_whatsapp_provider()
 
     raw = await request.body()
     try:
         parsed: Any = json.loads(raw) if raw else {}
     except json.JSONDecodeError as exc:
-        logger.warning("webhook.invalid_json", path=path, raw_len=len(raw), error=str(exc))
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="invalid json",
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid json") from exc
+
     body = parsed if isinstance(parsed, dict) else {}
-    event_peek = str(body.get("event", ""))
-    instance_peek = str(body.get("instance", ""))
-    api_key_header = request.headers.get("apikey", "")
-    cfg_key = settings.evolution_api_key or ""
-    # Always log hits (even on auth failure) so we can correlate Evolution logs ↔ API.
+    raw_event = str(body.get("event", ""))
+    instance_name = str(body.get("instance", ""))
+
+    if not provider.verify_webhook_auth(dict(request.headers)):
+        logger.warning("webhook.auth_failed", evo_event=raw_event, instance=instance_name)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token")
+
+    event_type = provider.parse_event_type(body)
+
     logger.info(
         "webhook.hit",
-        path=path,
-        evolution_event=event_peek,
-        evolution_instance=instance_peek,
+        evo_event=raw_event,
+        normalized=event_type,
+        instance=instance_name,
+        provider=provider.name,
         pool=pool is not None,
-        apikey_header_len=len(api_key_header),
-        apikey_configured_len=len(cfg_key),
     )
 
-    # 1. Auth — Evolution sends global API key in the `apikey` header.
-    evo_key_configured = bool(cfg_key)
-    if cfg_key and api_key_header != cfg_key:
-        logger.warning(
-            "webhook.auth_failed",
-            path=path,
-            header_present=bool(api_key_header),
-            header_len=len(api_key_header),
-            evolution_key_configured=evo_key_configured,
-            keys_match=False,
-        )
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid apikey")
-
-    event_type: str = body.get("event", "")
-    instance_name: str = body.get("instance", "")
-    data: dict[str, Any] = body.get("data", {})
-
-    logger.info(
-        "webhook.ingress",
-        path=path,
-        evolution_event=event_type,
-        evolution_instance=instance_name,
-        pool=pool is not None,
-        body_keys=sorted(body.keys()) if isinstance(body, dict) else "not_dict",
-    )
-
-    # 2a. QR code delivered by Evolution — store in DB so the frontend can poll it.
-    if event_type == "qrcode.updated":
-        diag = evolution_qr_diagnose(data if isinstance(data, dict) else None)
-        logger.info("webhook.qrcode_event", instance=instance_name, diagnose=diag)
-        qr_base64: str = evolution_qr_to_data_url(data if isinstance(data, dict) else None)
-        if not pool:
-            logger.warning("webhook.qrcode_skipped_no_db_pool", instance=instance_name)
-        elif not qr_base64:
-            logger.warning(
-                "webhook.qrcode_empty_after_parse",
-                instance=instance_name,
-                diagnose=diag,
-            )
-        if qr_base64 and pool:
+    # -- QR code update --------------------------------------------------
+    if event_type == "qrcode_updated":
+        qr_b64 = provider.parse_qrcode(body)
+        if qr_b64 and pool:
             async with pool.acquire() as conn:
                 await conn.execute(
                     """
@@ -226,24 +191,21 @@ async def receive_whatsapp_event(request: Request) -> JSONResponse:
                        AND external_id = $2
                        AND status     != 'revoked'
                     """,
-                    json.dumps({"qrcode": qr_base64}),
+                    json.dumps({"qrcode": qr_b64}),
                     instance_name,
                 )
-            logger.info("webhook.qr_stored", instance=instance_name, qr_len=len(qr_base64))
+            logger.info("webhook.qr_stored", instance=instance_name, qr_len=len(qr_b64))
         return JSONResponse({"ok": True})
 
-    # 2b. Connection state update — mark integration as connected/disconnected.
-    if event_type == "connection.update":
-        state: str = data.get("state", "")
-        status_reason = data.get("statusReason")
-        logger.info(
-            "webhook.connection_update",
-            instance=instance_name,
-            state=state,
-            status_reason=status_reason,
-            pool=pool is not None,
-        )
-        if state == "open" and pool:
+    # -- Connection state update -----------------------------------------
+    if event_type == "connection_update":
+        update = provider.parse_connection_update(body)
+        logger.info("webhook.connection_update", instance=instance_name, state=update.state)
+
+        if not pool:
+            return JSONResponse({"ok": True})
+
+        if update.state == "open":
             async with pool.acquire() as conn:
                 await conn.execute(
                     """
@@ -257,7 +219,7 @@ async def receive_whatsapp_event(request: Request) -> JSONResponse:
                     instance_name,
                 )
             logger.info("webhook.whatsapp_connected", instance=instance_name)
-        elif state in ("close", "refused") and pool:
+        elif update.state in ("close", "refused"):
             async with pool.acquire() as conn:
                 await conn.execute(
                     """
@@ -269,81 +231,68 @@ async def receive_whatsapp_event(request: Request) -> JSONResponse:
                     """,
                     instance_name,
                 )
-            logger.info("webhook.whatsapp_disconnected", instance=instance_name, state=state)
-        elif state == "connecting":
             logger.info(
-                "webhook.connection_connecting",
+                "webhook.whatsapp_disconnected",
                 instance=instance_name,
-                status_reason=status_reason,
+                state=update.state,
             )
+
         return JSONResponse({"ok": True})
 
-    # 2c. Only handle inbound text messages for the agent pipeline.
-    if event_type != "messages.upsert":
-        logger.info(
-            "webhook.skipped_event",
-            evolution_event=event_type,
-            evolution_instance=instance_name,
-        )
-        return JSONResponse({"ok": True, "skipped": event_type})
+    # -- Anything else -> normalize as inbound message -------------------
+    if event_type != "messages_upsert":
+        logger.info("webhook.skipped_event", evo_event=raw_event, instance=instance_name)
+        return JSONResponse({"ok": True, "skipped": raw_event})
+
+    inbound = provider.parse_inbound_message(body)
+    if inbound is None:
+        skip_reason = _classify_messages_skip_reason(body)
+        return JSONResponse({"ok": True, "skipped": skip_reason})
 
     logger.info(
         "webhook.messages_upsert",
         instance=instance_name,
         pool=pool is not None,
+        contact_phone=inbound.contact_phone,
     )
-    key = data.get("key", {})
-    if key.get("fromMe", True):
-        return JSONResponse({"ok": True, "skipped": "outbound"})
-
-    text = _extract_text(data)
-    if not text:
-        return JSONResponse({"ok": True, "skipped": "no_text"})
-
-    provider_message_id: str = key.get("id", "")
-    contact_jid: str = key.get("remoteJid", "")
-    contact_phone = _phone_from_jid(contact_jid)
-    contact_name: str | None = data.get("pushName") or None
 
     if pool is None:
-        # No DB pool (offline / test mode) — still return 200.
         logger.warning("webhook.no_pool", instance=instance_name)
         return JSONResponse({"ok": True, "queued": False})
 
     async with pool.acquire() as conn:
-        # 3. Idempotency — silently accept duplicates.
         is_new = await _record_webhook_event(
             conn,
-            source="evolution",
-            event_type=event_type,
-            external_id=provider_message_id,
+            source=provider.name,
+            event_type=raw_event or "messages_upsert",
+            external_id=inbound.provider_message_id,
             payload=body,
-            tenant_id=None,  # will update below once we have tenant_id
+            tenant_id=None,
         )
         if not is_new:
-            logger.info("webhook.duplicate", message_id=provider_message_id)
+            logger.info("webhook.duplicate", message_id=inbound.provider_message_id)
             return JSONResponse({"ok": True, "duplicate": True})
 
-        # 4. Resolve tenant from instance name.
         tenant_id = await _resolve_tenant(conn, instance_name)
         if not tenant_id:
             logger.warning("webhook.tenant_not_found", instance=instance_name)
             return JSONResponse({"ok": True, "tenant": None})
 
-        # Update webhook_events with resolved tenant_id.
         await conn.execute(
-            "UPDATE webhook_events SET tenant_id = $1 WHERE source = 'evolution' AND external_id = $2",
+            "UPDATE webhook_events SET tenant_id = $1 WHERE source = $2 AND external_id = $3",
             tenant_id,
-            provider_message_id,
+            provider.name,
+            inbound.provider_message_id,
         )
 
-        # 5. Upsert conversation + persist inbound message.
-        conversation_id = await _upsert_conversation(conn, tenant_id, contact_phone, contact_name)
+        conversation_id = await _upsert_conversation(
+            conn, tenant_id, inbound.contact_phone, inbound.contact_name
+        )
         await _insert_inbound_message(
-            conn, tenant_id, conversation_id, provider_message_id, text
+            conn, tenant_id, conversation_id, inbound.provider_message_id, inbound.text
         )
 
-    # 6. Skip opted-out contacts — no agent, no reply.
+    # Honor opt-out without re-running the agent.
     async with pool.acquire() as conn:
         opted_row = await conn.fetchrow(
             "SELECT opted_out FROM conversations WHERE id = $1::uuid",
@@ -353,20 +302,13 @@ async def receive_whatsapp_event(request: Request) -> JSONResponse:
         logger.info("webhook.opted_out_skipped", conversation_id=conversation_id)
         return JSONResponse({"ok": True, "skipped": "opted_out"})
 
-    # 7. Enqueue Celery task (outside DB transaction — fire and forget).
     process_whatsapp_message.delay(
         tenant_id=tenant_id,
         conversation_id=conversation_id,
-        contact_phone=contact_phone,
-        user_message=text,
+        contact_phone=inbound.contact_phone,
+        user_message=inbound.text,
         instance_name=instance_name,
     )
 
-    logger.info(
-        "webhook.queued",
-        tenant_id=tenant_id,
-        conversation_id=conversation_id,
-        contact_phone=contact_phone,
-    )
-
+    logger.info("webhook.queued", tenant_id=tenant_id, conversation_id=conversation_id)
     return JSONResponse({"ok": True, "queued": True})

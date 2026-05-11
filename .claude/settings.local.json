@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Select-String -Path \"c:\\\\Users\\\\Arthur\\\\Desktop\\\\Central\\\\Projetos\\\\ZapAgent\\\\.env\" -Pattern \"WPPCONNECT_SECRET_KEY\")",
+      "Bash(openssl rand *)",
+      "Bash(docker exec *)",
+      "Bash(docker compose *)",
+      "Bash(Start-Sleep -Seconds 15)",
+      "Bash(Select-Object -Last 50)",
+      "PowerShell(curl -s -X POST http://localhost:8080/instance/create -H \"apikey: changeme\" -H \"Content-Type: application/json\" -d '{\"instanceName\": \"debug-test-001\", \"qrcode\": true, \"integration\": \"WHATSAPP-BAILEYS\"}')",
+      "PowerShell(python -m json.tool 2>&1)"
+    ]
+  }
+}

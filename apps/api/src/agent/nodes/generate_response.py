@@ -31,7 +31,7 @@ logger = get_logger(__name__)
 # Offline fallback texts
 # ---------------------------------------------------------------------------
 
-_GREETING_REPLY = "Ola! Como posso ajudar voce hoje?"
+_GREETING_REPLY = "Olá! Como posso ajudar você hoje?"
 _FALLBACK_REPLY = (
     "Obrigado pela mensagem! Vou repassar para um atendente humano em instantes."
 )
@@ -106,7 +106,7 @@ def _build_system_prompt(state: AgentState) -> str:
 def _faq_context_block(matches: list[FaqMatch]) -> str:
     if not matches:
         return ""
-    lines = ["Informacoes relevantes extraidas do FAQ:"]
+    lines = ["Informações relevantes extraídas do FAQ:"]
     for m in matches:
         lines.append("P: " + m["question"] + "\nR: " + m["answer"])
     return "\n\n".join(lines)

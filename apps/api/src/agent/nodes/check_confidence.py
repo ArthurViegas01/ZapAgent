@@ -45,6 +45,10 @@ def check_confidence(state: AgentState) -> dict[str, object]:
         # to respond so the worker can persist the opt-out and stop replying.
         next_action = "respond"
     elif intent == Intent.SCHEDULING and confidence >= threshold and state.get("appointment"):
+        # Only route to schedule if classify_intent / generate_response actually
+        # extracted an appointment draft. Without one, schedule_appointment
+        # would fall back to a "tomorrow + 30min" placeholder, which is worse
+        # than letting the LLM ask the user for the missing slot.
         next_action = "schedule"
     elif confidence < threshold:
         next_action = "handoff"
