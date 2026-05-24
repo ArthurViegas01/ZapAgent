@@ -9,6 +9,27 @@
 -- can read rows it owns without needing the GUC.
 -- =============================================================================
 
+-- Create auth schema stub for local Postgres. Supabase provides
+-- auth.uid() natively in production; we MUST NOT overwrite it there.
+-- The DO block runs the CREATE OR REPLACE only when the function does
+-- not already exist — under Supabase, this is a no-op.
+CREATE SCHEMA IF NOT EXISTS auth;
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+          FROM pg_proc p
+          JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname = 'auth' AND p.proname = 'uid'
+    ) THEN
+        EXECUTE $func$
+            CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $body$
+                SELECT NULL::uuid
+            $body$
+        $func$;
+    END IF;
+END$$;
+
 BEGIN;
 
 -- -----------------------------------------------------------------------
