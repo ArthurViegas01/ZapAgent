@@ -8,10 +8,10 @@ time, ~30 min after the secrets exist.
 > Architecture summary (see `ARCHITECTURE.md` for the why)
 >
 >     Netlify (free)        ──HTTPS──▶  Railway (paid min ~$5/mo)
->     Next.js dashboard                  ├ zapagent-api      (FastAPI)
->                                        ├ zapagent-worker   (Celery)
->                                        ├ zapagent-evolution (WhatsApp)
->                                        └ zapagent-redis    (managed plugin)
+>     Next.js dashboard                  ├ encaixe-api      (FastAPI)
+>                                        ├ encaixe-worker   (Celery)
+>                                        ├ encaixe-evolution (WhatsApp)
+>                                        └ encaixe-redis    (managed plugin)
 >                                                  │
 >                                                  ▼
 >                                          Supabase (free)
@@ -36,6 +36,23 @@ Tick each before proceeding.
 - [ ] **Google Cloud** OAuth client with Calendar scope (Calendar API enabled)
 - [ ] **Sentry** project (optional but recommended — leaving SENTRY_DSN empty disables cleanly)
 - [ ] `terraform` CLI ≥ 1.8 locally (`brew install terraform` / `tfenv install`)
+- [ ] Sanity: `cd apps/api && make test && make smoke-local` green locally before
+      pushing the deploy — CI runs the same and a red CI does NOT trip an
+      auto-deploy (see §6).
+
+### What ships in production
+
+The Terraform stack provisions four pieces, all `encaixe-*`-prefixed (the
+project's internal codename):
+
+| Component | Where | What it does |
+|---|---|---|
+| `encaixe-redis` | Railway managed plugin | Celery broker, rate-limit buckets, `lid_pn:*` cache |
+| `encaixe-evolution` | Railway service, built from `apps/evolution/Dockerfile` | WhatsApp gateway (Baileys 6.7.9) **with `lid_pipe.py` as PID 1** intercepting `sender_pn` (see §4.1) |
+| `encaixe-api` | Railway service, built from `apps/api/Dockerfile` (prod target) | FastAPI: REST, webhooks, rate-limit middleware with circuit breaker |
+| `encaixe-worker` | Railway service, same image, Celery start command | LangGraph agent runner |
+| dashboard | Netlify, `apps/web` | Next.js operator UI |
+| Postgres | Supabase | `tenants`/`messages`/`faq_items`/etc, pgvector |
 
 ---
 
@@ -142,20 +159,46 @@ terraform apply      # type 'yes' when prompted
 
 This provisions:
 
-- `zapagent-redis` (managed plugin)
-- `zapagent-evolution` (built from `apps/evolution/Dockerfile`, **NOT** the
+- `encaixe-redis` (managed plugin)
+- `encaixe-evolution` (built from `apps/evolution/Dockerfile`, **NOT** the
   upstream `:latest` image — the fix that pins Baileys 6.7.9 is essential
   for QR generation. If you see Terraform pick up `source_image` here,
   pull the latest commit.)
-- `zapagent-api` (FastAPI, built from `apps/api/Dockerfile`, target `prod`)
-- `zapagent-worker` (same image, Celery start command)
+- `encaixe-api` (FastAPI, built from `apps/api/Dockerfile`, target `prod`)
+- `encaixe-worker` (same image, Celery start command)
 
 - [ ] `terraform apply` completed without errors
 - [ ] Record outputs: `api_url`, `evolution_url`, `project_id`
 - [ ] Open the Railway dashboard — verify all four services are **green/running**
-- [ ] In each service, **Settings → Networking → Generate Domain** (for `zapagent-api`
-      and `zapagent-evolution`) so the `default_domain` referenced by other
+- [ ] In each service, **Settings → Networking → Generate Domain** (for `encaixe-api`
+      and `encaixe-evolution`) so the `default_domain` referenced by other
       services is actually allocated.
+
+### 4.1 Verify the @lid sender_pn intercept is alive
+
+Modern Brazilian WhatsApp accounts default to the `@lid` privacy JID;
+Evolution drops the real phone from its webhook payload. `lid_pipe.py`
+(embedded in the Evolution image) intercepts the missing data from
+Baileys' stdout and caches it in Redis. If this isn't running, every
+`@lid` contact will fail with `400 {"exists":false}` on the reply.
+
+```bash
+# Railway → encaixe-evolution → Logs. You should see, ONCE per restart:
+#   [lid_pipe] started; mirroring child=/bin/bash redis=redis://...:6379/0 ttl=86400s
+#
+# And per inbound message from an @lid contact:
+#   [lid_pipe] cached msg_id=<XXX> phone=<55XXXXX> total=N
+```
+
+- [ ] Logs show the `[lid_pipe] started` line on container boot
+- [ ] After the first real `@lid` message in §8, logs show a `cached
+      msg_id=...` line (it's fine if you haven't messaged yet — verify
+      again after §8)
+
+If you don't see `[lid_pipe] started`, the most likely cause is the
+`REDIS_URL` env var didn't land on the Evolution service. Re-check
+`terraform apply` output and `railway_variable_collection.evolution_vars`
+in `infra/terraform/environments/railway/main.tf`.
 
 ---
 
@@ -287,8 +330,8 @@ Expect, within ~5–15s:
 
 If something fails, debug in this order:
 
-1. Railway → `zapagent-api` logs → look for `webhook.queued` then `worker.task.started`
-2. Railway → `zapagent-worker` logs → look for `worker.reply_sent`
+1. Railway → `encaixe-api` logs → look for `webhook.queued` then `worker.task.started`
+2. Railway → `encaixe-worker` logs → look for `worker.reply_sent`
 3. Supabase SQL Editor:
    ```sql
    SELECT * FROM webhook_events ORDER BY received_at DESC LIMIT 5;

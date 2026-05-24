@@ -31,8 +31,12 @@ top, the closer to ready.
       already in settings; needs OTLP exporter + spans around graph nodes)
 - [x] Sentry integration (`SENTRY_DSN` already in settings) — wired in
       `apps/api/src/core/observability.py`
-- [ ] Rate-limit circuit breaker (today: fail-open if Redis unreachable;
-      switch to fail-closed after N consecutive Redis errors)
+- [x] **Rate-limit circuit breaker**. Five consecutive Redis errors
+      flip the breaker open for 30 s; while open, non-exempt requests
+      get HTTP 503 + `Retry-After: 30` instead of fail-open. Cooldown
+      transitions to half-open; a successful probe closes the circuit.
+      Lives in `apps/api/src/core/rate_limit.py`; tested by
+      `tests/core/test_rate_limit_breaker.py`. (2026-05-24 night)
 - [ ] Backups + restore drill for Supabase (RTO < 1h, RPO < 24h target)
 - [ ] Per-tenant cost dashboards (`messages.token_usage` is captured;
       need a pg view + dashboard tile)

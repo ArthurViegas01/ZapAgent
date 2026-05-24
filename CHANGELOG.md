@@ -6,6 +6,67 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (pre-deploy polish, 2026-05-24 night)
+- **Rate-limit circuit breaker** (`apps/api/src/core/rate_limit.py`).
+  Before, a sustained Redis outage left the middleware in unbounded
+  fail-open mode — effectively no rate limiting until Redis recovered.
+  Now: five consecutive Redis errors flip the breaker open for 30 s and
+  every non-exempt request gets HTTP 503 + ``Retry-After: 30`` instead
+  of silently bypassing the limit. After cooldown the breaker
+  half-opens; a successful probe closes it and zeros the counter.
+  Webhooks and ``/health`` stay exempt (Evolution → API never blocked
+  by a Redis blip). Six unit tests in
+  ``tests/core/test_rate_limit_breaker.py``. Closes the
+  ``[ ] Rate-limit circuit breaker`` item in the v0.2 roadmap.
+- **DEPLOY.md §4.1 — @lid sender_pn intercept verification**. New
+  checklist step that tells the operator how to confirm ``lid_pipe.py``
+  is running inside the Evolution container after ``terraform apply``,
+  via Railway logs (``[lid_pipe] started; mirroring …``). Without this
+  check it's easy to miss a missing ``REDIS_URL`` env var that would
+  silently drop the pipe into passthrough mode.
+- **TESTING.md B.3** — added the @lid runtime check (``docker logs
+  encaixe-evolution | grep lid_pipe``), an explicit ``"Oi"`` regression
+  test for the per-intent confidence rules (used to handoff, now
+  responds), and a new B.4 smoke for the rate-limit breaker (pause
+  Redis, watch the state transitions in the API logs).
+
+### Fixed (CI debt cleanup, 2026-05-24 night)
+- **`infra/terraform/environments/railway/main.tf` + `outputs.tf`** —
+  the project resource was declared as ``resource "railway_project"
+  "encaixe"`` but every reference used ``railway_project.zapagent.id``,
+  a leftover from an old rename. ``terraform validate`` was failing
+  with ``Reference to undeclared resource``, which is what kept the
+  ``Terraform — Railway Infrastructure / Plan & Apply`` CI job red on
+  the PR. Bulk-replace, no behavior change.
+- **Ruff debt zeroed** for `apps/api`. Pre-cleanup the CI ``ruff
+  check`` job reported 133 errors and ``ruff format --check`` flagged
+  27 files. The fix was three passes:
+  1. ``ruff check --fix`` — 118 automatic fixes (UP035, I001, SIM117,
+     RUF100 — all mechanical and behavior-preserving).
+  2. ``ruff format`` — 26 files reformatted; mostly blank-line drift
+     between divider comments and the block they introduce.
+  3. ``pyproject.toml`` tune: ``ignore = ["E501", "B008"]`` (B008
+     misfires on every FastAPI route that uses ``Depends()`` /
+     ``Security()`` in arg defaults — that's the framework's idiom,
+     not a bug). Per-file ignores for the two tests that need to
+     ``import …`` *after* monkeypatching ``sys.modules``, and for the
+     Celery ``raise self.retry(exc=exc)`` line that intentionally
+     omits ``from`` (Celery inspects the bare exception type to decide
+     retry vs permanent failure).
+
+  Plus three pinpoint cleanups: ``src/agent/state.py`` dropped the
+  Python 3.10 ``StrEnum`` compat shim (project requires ≥3.11 anyway),
+  ``src/api/v1/routers/faq.py`` got ``# noqa: RUF006`` on its two
+  intentional fire-and-forget ``asyncio.create_task`` calls, and
+  ``tests/test_webhook_whatsapp.py`` renamed an unused ``pool`` to
+  ``_pool`` (RUF059).
+
+  Post-cleanup the ``API — Lint, Type-check & Test`` ``ruff +
+  ruff format`` steps both pass. Mypy is **not** addressed here; it
+  still reports 62 errors (mostly unparameterized ``dict``/``list``
+  and missing stubs for ``langgraph``/``anthropic``) — a separate
+  pass.
+
 ### Changed (@lid resolver — production-portable architecture, 2026-05-24 late)
 The Docker-SDK sidecar approach landed earlier today works under
 docker-compose but cannot run on Railway, which does not expose a shared

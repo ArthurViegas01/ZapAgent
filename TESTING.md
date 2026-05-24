@@ -221,6 +221,31 @@ De OUTRO celular, mande para o número conectado:
 - Dashboard → Conversas: a conversa aparece com os dois turnos
 - Dashboard → Visão geral: contador "Mensagens respondidas" incrementa
 
+> **Se você está testando com um número WhatsApp moderno (privacy mode ligado,
+> padrão em contas BR novas):** o JID inbound chega como `@lid` em vez de
+> `@s.whatsapp.net`. Para o reply funcionar, o `lid_pipe.py` embutido na
+> imagem do Evolution precisa estar interceptando o `sender_pn`. Confira:
+>
+> ```bash
+> docker logs encaixe-evolution | grep "\[lid_pipe\]"
+> # Esperado:
+> #   [lid_pipe] started; mirroring child=/bin/bash redis=redis://redis:6379/0 ttl=86400s
+> # E após cada mensagem @lid recebida:
+> #   [lid_pipe] cached msg_id=... phone=55XXXXXX total=N
+> ```
+>
+> Se não vir o `cached`, sua mensagem não passou pelo intercept e o reply vai
+> dar 400. Veja se o REDIS_URL está no env do serviço evolution
+> (`docker compose config evolution | grep -i redis`).
+
+Depois teste saudação simples (regression do per-intent confidence rules):
+
+> "Oi"
+
+**Esperado:** auto-reply educado (não handoff humano). Antes do fix de
+2026-05-24 isso caía em "vou chamar um atendente" porque GREETING não
+match nenhuma FAQ.
+
 Depois teste agendamento:
 
 > "Quero agendar amanhã às 14h."
@@ -229,6 +254,34 @@ Depois teste agendamento:
 - Slot-filling extrai date+time → confirmação
 - Se Google Calendar estiver conectado: evento criado no calendário
 - `SELECT * FROM appointments WHERE tenant_id=...;` mostra a linha
+
+### B.4 Smoke do circuit breaker do rate-limit
+
+O middleware fail-open em blip Redis, mas após 5 falhas consecutivas
+abre o circuito e responde 503 com `Retry-After`. Para forçar localmente:
+
+```bash
+# 1. Pause o Redis (mantém a estrutura, só corta a conexão):
+docker compose pause redis
+
+# 2. Faça 6 requests pra um endpoint NÃO exempt (webhooks são exempt!):
+for i in 1 2 3 4 5 6; do
+  curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8000/v1/tenants
+done
+# Esperado: 5 respostas (fail-open: 401/403/etc), 6a vira 503
+
+# 3. Logs da API mostram a transição:
+docker compose logs api | grep rate_limit.breaker
+# Esperado:
+#   rate_limit.breaker_opened consecutive_errors=5 cooldown_seconds=30.0
+#   rate_limit.breaker_open_reject path=/v1/tenants
+
+# 4. Recupera:
+docker compose unpause redis
+# Após 30s o breaker half-open, próxima request bem-sucedida fecha:
+#   rate_limit.breaker_half_open
+#   rate_limit.breaker_closed consecutive_errors_before=5
+```
 
 ---
 
@@ -256,8 +309,8 @@ cd apps/web && pnpm test
 | A.4 curl webhook + Stub | Webhook handler, dedup, tenant resolution, Celery, billing gate, persistência | LLM real (Anthropic), embedding real (Voyage), WhatsApp real |
 | A.5 billing gate | trial expired, suspended, mensagens pt-BR ao cliente | – |
 | B Evolution real | TUDO: WhatsApp real, QR pairing, mensagens reais, GCal | OAuth Google Calendar end-to-end (precisa configurar separado) |
-| `make test` | Nodes LangGraph isolados, parsers Evolution/Stub, billing gate unitário | Postgres real, RLS |
-| `make test-integration` | RLS + GUC, isolation cross-tenant, query helpers reais | Webhook → Celery → reply (precisa B) |
+| `make test` | Nodes LangGraph isolados, parsers Evolution/Stub, billing gate unitário, rate-limit circuit breaker, @lid parser | Postgres real, RLS |
+| `make test-integration` | RLS + GUC, isolation cross-tenant, query helpers reais, regressão de event-loop por task (per_task_pool_scoping) | Webhook → Celery → reply (precisa B) |
 
 ---
 
