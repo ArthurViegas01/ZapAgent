@@ -6,6 +6,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed (deploy path pivot — Terraform → Railway UI, 2026-05-24 night)
+Investigated why `terraform validate` was red on the develop→main PR.
+The encaixe/zapagent reference typo (fixed earlier tonight) was only
+the surface; underneath, **the entire `infra/terraform/environments/
+railway/main.tf` was written against an API that the
+`terraform-community-providers/railway` provider never shipped**.
+Resources like `railway_plugin` and `railway_variable_collection`, the
+nested `source { }` and `build_config { }` blocks on `railway_service`,
+and the `start_command` / `healthcheck_path` attrs simply do not exist
+— verified against v0.1, v0.3.1, and v0.6.2 of that provider. The file
+looks like AI-generated code from before this codebase existed, against
+a fictional provider schema; it can't have ever applied.
+
+Until someone rewrites the IaC against the real schema (`source_repo`
+flat attr, `config_path` pointing at a `railway.toml`, per-variable
+`railway_variable` resources, external Redis since the plugin
+resource doesn't exist), the deploy path is the Railway dashboard.
+DEPLOY.md §4 was rewritten end-to-end as a click-through runbook with
+all the env-var values inline.
+
+ROADMAP gained a new open item: "Rewrite Terraform Railway module
+against the real provider schema".
+
 ### Added (pre-deploy polish, 2026-05-24 night)
 - **Rate-limit circuit breaker** (`apps/api/src/core/rate_limit.py`).
   Before, a sustained Redis outage left the middleware in unbounded

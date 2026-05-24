@@ -31,6 +31,18 @@ top, the closer to ready.
       already in settings; needs OTLP exporter + spans around graph nodes)
 - [x] Sentry integration (`SENTRY_DSN` already in settings) — wired in
       `apps/api/src/core/observability.py`
+- [ ] **Rewrite Terraform Railway module against the real provider schema.**
+      Surfaced 2026-05-24 night: the existing `infra/terraform/environments/
+      railway/main.tf` was authored against an imagined API. None of the
+      resources/attrs it uses (`railway_plugin`, `railway_variable_collection`,
+      nested `source { }` / `build_config { }` blocks, `start_command`,
+      `healthcheck_path`) exist in any published version of the
+      `terraform-community-providers/railway` provider (verified against
+      0.1 / 0.3.1 / 0.6.2). Deploy is dashboard-driven for now (DEPLOY.md
+      §4 walks through it manually). A proper rewrite uses `source_repo`
+      + `config_path` (railway.toml), per-variable `railway_variable`
+      resources, and an external Redis (Upstash or a regular service
+      since the plugin resource doesn't exist).
 - [x] **Rate-limit circuit breaker**. Five consecutive Redis errors
       flip the breaker open for 30 s; while open, non-exempt requests
       get HTTP 503 + `Retry-After: 30` instead of fail-open. Cooldown

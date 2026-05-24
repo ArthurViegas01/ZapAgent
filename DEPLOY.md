@@ -35,10 +35,13 @@ Tick each before proceeding.
 - [ ] **Voyage AI** API key (`voyage-3-lite` embeddings) — https://dash.voyageai.com
 - [ ] **Google Cloud** OAuth client with Calendar scope (Calendar API enabled)
 - [ ] **Sentry** project (optional but recommended — leaving SENTRY_DSN empty disables cleanly)
-- [ ] `terraform` CLI ≥ 1.8 locally (`brew install terraform` / `tfenv install`)
 - [ ] Sanity: `cd apps/api && make test && make smoke-local` green locally before
       pushing the deploy — CI runs the same and a red CI does NOT trip an
       auto-deploy (see §6).
+
+> `terraform` CLI is NOT a prereq right now — see §4. The Railway IaC at
+> `infra/terraform/environments/railway/main.tf` doesn't validate against
+> the current provider schema, so the deploy is dashboard-driven for now.
 
 ### What ships in production
 
@@ -120,85 +123,147 @@ supabase db push   # picks up all 3 migrations from db/migrations/
 
 ---
 
-## 4. Provision Railway via Terraform
+## 4. Provision Railway (manual UI — Terraform is broken)
 
-```bash
-cd infra/terraform/environments/railway
-cp terraform.tfvars.example terraform.tfvars
-$EDITOR terraform.tfvars      # fill in every value
-```
+> **Heads-up (2026-05-24):** `infra/terraform/environments/railway/main.tf`
+> was authored against an API that the `terraform-community-providers/railway`
+> provider never shipped. `terraform validate` fails on every version we
+> tried (0.1 through 0.6.2) because `railway_plugin`, `railway_variable_collection`,
+> the nested `source { }`/`build_config { }` blocks, and the
+> `start_command`/`healthcheck_path` attrs simply do not exist in this
+> provider. Until someone rewrites the IaC against the real schema
+> (`source_repo`, `config_path`, per-variable `railway_variable`, external
+> Redis since the plugin resource doesn't exist), the path forward is the
+> Railway dashboard. That's the runbook below. Track it in the ROADMAP as
+> "rewrite Terraform Railway module".
 
-Required values in `terraform.tfvars`:
+You'll create one project and four services / one Redis through the
+Railway dashboard. Plan on ~30 min the first time, ~5 min for subsequent
+changes (Railway auto-redeploys on git push once the services are wired
+to GitHub).
 
-| Variable | Source |
-|---|---|
-| `railway_token` | Railway → Account Settings → Tokens → New Token |
-| `github_repo` | `arthurpviegas/zapagent` (owner/repo) |
-| `deploy_branch` | `main` |
-| `supabase_url` | Supabase → Settings → API → Project URL |
-| `supabase_anon_key` | Supabase → Settings → API → Project API keys → `anon`/`public` |
-| `supabase_service_role_key` | Supabase → Settings → API → Project API keys → `service_role` (secret!) |
-| `supabase_db_url` | From §3 |
-| `anthropic_api_key` | Anthropic console |
-| `voyage_api_key` | Voyage dashboard |
-| `evolution_api_key` | From §1, secret #1 |
-| `evolution_webhook_token` | From §1, secret #2 |
-| `google_oauth_client_id` | From §2 |
-| `google_oauth_client_secret` | From §2 |
-| `google_oauth_redirect_uri` | `https://<YOUR-NETLIFY-SITE>.netlify.app/auth/google-calendar/callback` |
-| `sentry_dsn` | Sentry project DSN, or `""` to disable |
-| `sentry_traces_sample_rate` | `0.1` (default) |
+### 4.1 Generate a Railway API token (only used by GitHub Actions)
 
-Then:
+- [ ] Railway → Account Settings → Tokens → **Create New Token**
+- [ ] Save as `RAILWAY_TOKEN` in your password manager (will go into
+      GitHub secrets in §6 — Actions uses it to trigger redeploys via
+      `railway up`)
 
-```bash
-terraform init
-terraform plan       # review carefully — first run will create ~7 resources
-terraform apply      # type 'yes' when prompted
-```
+### 4.2 Create the project + Redis
 
-This provisions:
+- [ ] Railway dashboard → **New Project** → name it `encaixe`
+- [ ] Inside the project → **+ New** → **Database** → **Add Redis**
+      → name the service `encaixe-redis`
+- [ ] Click the Redis service → **Variables** tab → copy the value of
+      `REDIS_URL` (it looks like `redis://default:<PWD>@<HOST>.railway.internal:6379`).
+      You'll paste it into the other services below.
 
-- `encaixe-redis` (managed plugin)
-- `encaixe-evolution` (built from `apps/evolution/Dockerfile`, **NOT** the
-  upstream `:latest` image — the fix that pins Baileys 6.7.9 is essential
-  for QR generation. If you see Terraform pick up `source_image` here,
-  pull the latest commit.)
-- `encaixe-api` (FastAPI, built from `apps/api/Dockerfile`, target `prod`)
-- `encaixe-worker` (same image, Celery start command)
+### 4.3 Create the Evolution service
 
-- [ ] `terraform apply` completed without errors
-- [ ] Record outputs: `api_url`, `evolution_url`, `project_id`
-- [ ] Open the Railway dashboard — verify all four services are **green/running**
-- [ ] In each service, **Settings → Networking → Generate Domain** (for `encaixe-api`
-      and `encaixe-evolution`) so the `default_domain` referenced by other
-      services is actually allocated.
+- [ ] Project → **+ New** → **GitHub Repo** → pick `arthurpviegas/zapagent` (or your fork)
+- [ ] Settings → name it `encaixe-evolution`
+- [ ] Settings → Source → **Root Directory** = `apps/evolution`
+- [ ] Settings → Build → **Builder** = Dockerfile (auto-detected from `apps/evolution/Dockerfile`)
+- [ ] Settings → Networking → **Generate Domain** (Railway gives you `encaixe-evolution-production.up.railway.app`).
+      You'll need this URL for the API service below.
+- [ ] Settings → Volumes → **+ Volume** → Mount path `/evolution/instances`
+      (required so WhatsApp sessions survive restarts)
+- [ ] Variables tab — paste these (use the Redis URL from §4.2):
 
-### 4.1 Verify the @lid sender_pn intercept is alive
+  ```env
+  SERVER_TYPE=http
+  SERVER_PORT=8080
+  AUTHENTICATION_API_KEY=<EVOLUTION_API_KEY from §1>
+  DATABASE_ENABLED=true
+  DATABASE_PROVIDER=postgresql
+  DATABASE_CONNECTION_URI=<your supabase_db_url>?schema=evolution_api
+  CACHE_REDIS_ENABLED=true
+  CACHE_REDIS_URI=<REDIS_URL from §4.2>/3
+  CACHE_REDIS_PREFIX_KEY=evolution
+  WEBHOOK_GLOBAL_URL=https://<encaixe-api-domain>/webhooks/whatsapp
+  WEBHOOK_GLOBAL_ENABLED=true
+  WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS=false
+  WEBHOOK_EVENTS_QRCODE_UPDATED=true
+  WEBHOOK_EVENTS_MESSAGES_UPSERT=true
+  WEBHOOK_EVENTS_CONNECTION_UPDATE=true
+  REDIS_URL=<REDIS_URL from §4.2>/0
+  LID_TTL_SECONDS=86400
+  CONFIG_SESSION_PHONE_VERSION=2.3000.1035194821
+  LOG_BAILEYS=debug
+  ```
 
-Modern Brazilian WhatsApp accounts default to the `@lid` privacy JID;
-Evolution drops the real phone from its webhook payload. `lid_pipe.py`
-(embedded in the Evolution image) intercepts the missing data from
-Baileys' stdout and caches it in Redis. If this isn't running, every
-`@lid` contact will fail with `400 {"exists":false}` on the reply.
+  > The last two env vars (`REDIS_URL`, `LID_TTL_SECONDS`) are **required**
+  > for `lid_pipe.py` (the @lid intercept inside the Evolution image) to
+  > cache `sender_pn`. Without them privacy-mode WhatsApp contacts (most
+  > modern BR accounts) can never receive replies. The script falls into
+  > passthrough mode silently if the env is missing — Evolution still
+  > runs, but every `@lid` reply 400s.
 
-```bash
-# Railway → encaixe-evolution → Logs. You should see, ONCE per restart:
-#   [lid_pipe] started; mirroring child=/bin/bash redis=redis://...:6379/0 ttl=86400s
-#
-# And per inbound message from an @lid contact:
-#   [lid_pipe] cached msg_id=<XXX> phone=<55XXXXX> total=N
-```
+- [ ] **Deploy** — wait for build, check Logs.
 
-- [ ] Logs show the `[lid_pipe] started` line on container boot
-- [ ] After the first real `@lid` message in §8, logs show a `cached
-      msg_id=...` line (it's fine if you haven't messaged yet — verify
-      again after §8)
+### 4.4 Create the API service
 
-If you don't see `[lid_pipe] started`, the most likely cause is the
-`REDIS_URL` env var didn't land on the Evolution service. Re-check
-`terraform apply` output and `railway_variable_collection.evolution_vars`
-in `infra/terraform/environments/railway/main.tf`.
+- [ ] Project → **+ New** → **GitHub Repo** → same repo
+- [ ] Settings → name it `encaixe-api`
+- [ ] Settings → Source → leave **Root Directory** empty (build from repo root)
+- [ ] Settings → Build → **Dockerfile Path** = `apps/api/Dockerfile`, **Target Stage** = `prod`
+- [ ] Settings → Start Command = `uvicorn src.main:app --host 0.0.0.0 --port $PORT --workers 2`
+- [ ] Settings → Healthcheck Path = `/health`
+- [ ] Settings → Networking → **Generate Domain** → save the URL (this is `<api_url>`
+      below and replaces `<encaixe-api-domain>` in §4.3 — go back and
+      update the Evolution `WEBHOOK_GLOBAL_URL` after this step)
+- [ ] Variables tab — paste these:
+
+  ```env
+  ENVIRONMENT=production
+  DATABASE_URL_SYNC=<your supabase_db_url>
+  REDIS_URL=<REDIS_URL from §4.2>
+  CELERY_BROKER_URL=<REDIS_URL from §4.2>/1
+  CELERY_RESULT_BACKEND=<REDIS_URL from §4.2>/2
+  SUPABASE_URL=https://<REF>.supabase.co
+  SUPABASE_ANON_KEY=<from §3>
+  SUPABASE_SERVICE_ROLE_KEY=<from §3>
+  ANTHROPIC_API_KEY=<your anthropic key>
+  VOYAGE_API_KEY=<your voyage key>
+  WHATSAPP_PROVIDER=evolution
+  EVOLUTION_API_URL=https://<encaixe-evolution-domain from §4.3>
+  EVOLUTION_API_KEY=<EVOLUTION_API_KEY from §1>
+  EVOLUTION_WEBHOOK_TOKEN=<EVOLUTION_WEBHOOK_TOKEN from §1>
+  EVOLUTION_WEBHOOK_BASE_URL=https://<encaixe-api-domain>/webhooks/whatsapp
+  GOOGLE_OAUTH_CLIENT_ID=<from §2>
+  GOOGLE_OAUTH_CLIENT_SECRET=<from §2>
+  GOOGLE_OAUTH_REDIRECT_URI=https://<YOUR-NETLIFY-SITE>.netlify.app/auth/google-calendar/callback
+  SENTRY_DSN=<optional, blank to disable>
+  SENTRY_TRACES_SAMPLE_RATE=0.1
+  ```
+
+- [ ] **Deploy**
+
+### 4.5 Create the Celery worker service
+
+Easiest path: **Duplicate** the `encaixe-api` service in the Railway UI
+(service → Settings → … → Duplicate), then change two things:
+
+- [ ] Rename to `encaixe-worker`
+- [ ] Settings → Start Command = `celery -A src.worker.celery_app worker --loglevel=INFO --concurrency=2`
+- [ ] Settings → Healthcheck Path → remove (worker doesn't serve HTTP)
+- [ ] Settings → Networking → do NOT generate a domain (internal-only)
+- [ ] Variables — copy verbatim from `encaixe-api` (Railway lets you
+      reference shared env via `${{encaixe-api.VARNAME}}` if you want to
+      avoid duplication, but copy-paste is fine for a pilot)
+- [ ] **Deploy**
+
+### 4.6 Verify
+
+- [ ] All four services (`encaixe-redis`, `encaixe-evolution`, `encaixe-api`, `encaixe-worker`) show green/running
+- [ ] `curl https://<api_url>/health` → 200
+- [ ] `curl https://<api_url>/ready` → `{"status":"ready","db":true,"whatsapp_provider":"evolution"}`
+- [ ] Logs on `encaixe-evolution` show **on boot**:
+      `[lid_pipe] started; mirroring child=/bin/bash redis=redis://...:6379/0 ttl=86400s`
+      — if you don't see it, `REDIS_URL` is missing from §4.3 env vars
+      and `@lid` contacts will silently fail in production.
+- [ ] Logs on `encaixe-api` show `RateLimitMiddleware` configured (no
+      Redis errors on startup)
 
 ---
 
