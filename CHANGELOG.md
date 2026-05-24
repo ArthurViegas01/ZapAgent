@@ -6,6 +6,64 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (production-blocker close-out, 2026-05-24 EOD)
+The two known issues recorded after the morning e2e test are closed.
+Counts after this batch: **102/102 unit, 4/5 integration** (the 5th
+integration test, `test_rls_guc_isolates_faq_items`, requires
+``SET ROLE``, which the Supabase pooler intentionally blocks — same
+behavior as before this session).
+
+- **`@lid` contact resolver sidecar** — closes the WhatsApp privacy-mode
+  outbound-reply blocker. Evolution 2.2.3 drops Baileys' ``sender_pn``
+  before emitting webhook payloads, so privacy-mode contacts arrive with
+  a masked ``<digits>:<device>@lid`` JID and ``sendText`` 400s on the
+  way back out. New pieces:
+  * `apps/api/src/sidecars/lid_resolver.py` — daemon that streams
+    ``encaixe-evolution``'s stdout through the Docker socket, parses
+    ``recv`` lines for ``(message_id, sender_pn)``, and caches the
+    mapping at ``lid_pn:{message_id}`` in Redis with a 24 h TTL.
+    `parse_recv_line` is a pure function (13 unit tests).
+  * `apps/api/src/integrations/whatsapp/lid.py` — async read-side
+    helper; webhook calls this when the inbound JID ends in ``@lid``.
+    Singleton aioredis client with `socket_connect_timeout=1` so a
+    dead resolver can't stall the webhook.
+  * `apps/api/src/api/webhooks/whatsapp.py` — patches
+    ``inbound.contact_phone`` via `dataclasses.replace` when the
+    sidecar resolves the JID; falls through with the masked phone +
+    warning log when the cache misses (so the inbound is still
+    persisted and gaps show up in observability).
+  * `docker-compose.yml` — new `lid-resolver` service. Read-only bind
+    of `/var/run/docker.sock`. Reuses the API image so we don't fork
+    a separate build pipeline; the `docker` Python SDK is the only
+    new runtime dep (~200 KB) and ships in the same wheel layer.
+  * `apps/api/pyproject.toml` — added `docker>=7.1.0`.
+  Not done in this batch: upstream PR to evolution-api to expose
+  ``senderPn`` in the webhook payload natively. The sidecar is the
+  unblock; the upstream patch is the cleanup.
+
+- **Per-intent confidence rules in `check_confidence`** — closes the
+  UX bug where a casual ``GREETING`` cosine-missed every FAQ row and
+  routed to handoff. `apps/api/src/agent/nodes/check_confidence.py`
+  now early-returns ``confidence=1.0, next_action=respond`` for
+  ``GREETING``, ``OPT_OUT``, and slot-incomplete ``SCHEDULING``;
+  ``INFORMATION`` / ``PRICING`` / ``OTHER`` and ``SCHEDULING`` with an
+  appointment draft still use the FAQ-score path against
+  ``agent_confidence_threshold``. Three new tests in
+  `apps/api/tests/agent/test_check_confidence.py` cover greeting,
+  scheduling-without-appointment-low-score (the original bug), and
+  pricing-low-score-still-handoffs (the *anti*-regression: we must
+  not short-circuit real information seeking).
+
+### Added (tests)
+- `apps/api/tests/integration/test_per_task_pool_scoping.py` —
+  regression for the 4d6d9be event-loop fix. Two consecutive
+  ``asyncio.run`` invocations of the worker-pool scope and the
+  PostgresSaver scope must both succeed. Reproduces the Celery prefork
+  lifecycle; would crash with "bound to a different event loop" if any
+  future refactor reintroduces a process-singleton pool/lock/saver.
+  Gated by the existing ``integration_dsn`` fixture so it skips
+  cleanly when Postgres is unreachable.
+
 ### Fixed (end-to-end WhatsApp pairing test, 2026-05-24 PM)
 Bugs caught during the first real WhatsApp pair-and-message test against
 Supabase production (project `oodfxbrbawcnromvhjga`). Inbound flow
