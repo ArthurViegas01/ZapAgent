@@ -53,7 +53,7 @@ resource "railway_project" "encaixe" {
 # ---------------------------------------------------------------------------
 
 resource "railway_plugin" "redis" {
-  project_id      = railway_project.zapagent.id
+  project_id      = railway_project.encaixe.id
   name            = "encaixe-redis"
   plugin_type     = "redis"
 }
@@ -63,7 +63,7 @@ resource "railway_plugin" "redis" {
 # ---------------------------------------------------------------------------
 
 resource "railway_service" "evolution" {
-  project_id = railway_project.zapagent.id
+  project_id = railway_project.encaixe.id
   name       = "encaixe-evolution"
 
   # IMPORTANT: build from `apps/evolution/Dockerfile` (NOT the official
@@ -99,9 +99,9 @@ locals {
 }
 
 resource "railway_variable_collection" "evolution_vars" {
-  project_id      = railway_project.zapagent.id
+  project_id      = railway_project.encaixe.id
   service_id      = railway_service.evolution.id
-  environment_id  = railway_project.zapagent.default_environment_id
+  environment_id  = railway_project.encaixe.default_environment_id
 
   variables = {
     SERVER_TYPE             = "http"
@@ -144,7 +144,7 @@ resource "railway_variable_collection" "evolution_vars" {
 # ---------------------------------------------------------------------------
 
 resource "railway_service" "api" {
-  project_id = railway_project.zapagent.id
+  project_id = railway_project.encaixe.id
   name       = "encaixe-api"
 
   source {
@@ -163,9 +163,9 @@ resource "railway_service" "api" {
 }
 
 resource "railway_variable_collection" "api_vars" {
-  project_id     = railway_project.zapagent.id
+  project_id     = railway_project.encaixe.id
   service_id     = railway_service.api.id
-  environment_id = railway_project.zapagent.default_environment_id
+  environment_id = railway_project.encaixe.default_environment_id
 
   variables = {
     ENVIRONMENT             = "production"
@@ -227,7 +227,7 @@ resource "railway_variable_collection" "api_vars" {
 # ---------------------------------------------------------------------------
 
 resource "railway_service" "worker" {
-  project_id = railway_project.zapagent.id
+  project_id = railway_project.encaixe.id
   name       = "encaixe-worker"
 
   source {
@@ -245,9 +245,9 @@ resource "railway_service" "worker" {
 }
 
 resource "railway_variable_collection" "worker_vars" {
-  project_id     = railway_project.zapagent.id
+  project_id     = railway_project.encaixe.id
   service_id     = railway_service.worker.id
-  environment_id = railway_project.zapagent.default_environment_id
+  environment_id = railway_project.encaixe.default_environment_id
 
   # Worker needs identical env vars to the API.
   variables = railway_variable_collection.api_vars.variables

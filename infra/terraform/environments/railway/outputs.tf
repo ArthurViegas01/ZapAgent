@@ -16,5 +16,5 @@ output "redis_url" {
 
 output "project_id" {
   description = "Railway project ID"
-  value       = railway_project.zapagent.id
+  value       = railway_project.encaixe.id
 }
