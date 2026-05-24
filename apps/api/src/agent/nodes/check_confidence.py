@@ -1,9 +1,10 @@
 """check_confidence — decide what to do next: reply, schedule, or hand off.
 
-The decision is computed from:
-  - top FAQ match score (proxy for retrieval confidence)
-  - whether the response was the placeholder fallback
-  - the classified intent (scheduling forces the schedule branch)
+For intents whose action does not depend on FAQ retrieval (greetings,
+opt-out, slot-incomplete scheduling), confidence is derived from the
+classifier itself rather than from cosine similarity. Otherwise the
+decision is computed from the top FAQ match score against
+`agent_confidence_threshold`.
 
 Returns a `confidence` score in [0, 1] and a `next_action` string used by the
 conditional edge in graph.py.
@@ -38,22 +39,38 @@ def check_confidence(state: AgentState) -> dict[str, object]:
     threshold = settings.agent_confidence_threshold
 
     intent = state.get("intent", Intent.OTHER)
-    confidence = _score_from_state(state)
 
-    if intent == Intent.OPT_OUT:
-        # Opt-out is always handled (no LLM, no scheduling), but we route
-        # to respond so the worker can persist the opt-out and stop replying.
+    # Per-intent rules first: for intents where FAQ retrieval isn't the
+    # signal driving the next step, the classifier's confidence is what
+    # matters, not cosine similarity. Without this branch, a casual
+    # greeting like "Oi" cosine-misses every FAQ row, lands at ~0.18,
+    # and routes to handoff — the user gets "vou chamar um atendente
+    # humano" for a hello, which is UX-broken.
+    if intent == Intent.GREETING:
+        confidence = 1.0
         next_action = "respond"
-    elif intent == Intent.SCHEDULING and confidence >= threshold and state.get("appointment"):
-        # Only route to schedule if classify_intent / generate_response actually
-        # extracted an appointment draft. Without one, schedule_appointment
-        # would fall back to a "tomorrow + 30min" placeholder, which is worse
-        # than letting the LLM ask the user for the missing slot.
-        next_action = "schedule"
-    elif confidence < threshold:
-        next_action = "handoff"
+    elif intent == Intent.OPT_OUT:
+        # Opt-out is always handled (no LLM, no scheduling); respond so
+        # the worker can persist the opt-out and stop replying.
+        confidence = 1.0
+        next_action = "respond"
+    elif intent == Intent.SCHEDULING and not state.get("appointment"):
+        # Slot-incomplete scheduling: let generate_response ask the user
+        # for the missing slot. Routing to handoff on a low FAQ score
+        # here defeats the purpose of slot-filling.
+        confidence = 1.0
+        next_action = "respond"
     else:
-        next_action = "respond"
+        # INFORMATION / PRICING / OTHER, and SCHEDULING when an
+        # appointment was extracted: use FAQ retrieval score against
+        # the configured threshold.
+        confidence = _score_from_state(state)
+        if intent == Intent.SCHEDULING and confidence >= threshold and state.get("appointment"):
+            next_action = "schedule"
+        elif confidence < threshold:
+            next_action = "handoff"
+        else:
+            next_action = "respond"
 
     logger.info(
         "check_confidence.done",
