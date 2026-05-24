@@ -26,11 +26,25 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 _KEYWORDS: dict[Intent, tuple[str, ...]] = {
-    Intent.OPT_OUT: ("parar", "sair", "cancelar inscri", "remover", "descadastrar", "nao quero mais", "nao quero receber"),
+    Intent.OPT_OUT: (
+        "parar",
+        "sair",
+        "cancelar inscri",
+        "remover",
+        "descadastrar",
+        "nao quero mais",
+        "nao quero receber",
+    ),
     Intent.PRICING: ("preco", "valor", "custo", "quanto custa", "tabela", "orcamento", "preco"),
     Intent.SCHEDULING: (
-        "agendar", "marcar", "horario", "consulta", "encaixe", "remarcar",
-        "disponibilidade", "quando posso",
+        "agendar",
+        "marcar",
+        "horario",
+        "consulta",
+        "encaixe",
+        "remarcar",
+        "disponibilidade",
+        "quando posso",
     ),
     Intent.GREETING: ("oi", "ola", "bom dia", "boa tarde", "boa noite", "tudo bem", "tudo bom"),
     Intent.INFORMATION: ("endereco", "horario de funcionamento", "telefone", "onde fica"),
@@ -38,11 +52,24 @@ _KEYWORDS: dict[Intent, tuple[str, ...]] = {
 
 # Also check with accents (lowercased)
 _KEYWORDS_ACCENT: dict[Intent, tuple[str, ...]] = {
-    Intent.OPT_OUT: ("parar", "sair", "cancelar inscri", "remover", "descadastrar", "não quero mais"),
+    Intent.OPT_OUT: (
+        "parar",
+        "sair",
+        "cancelar inscri",
+        "remover",
+        "descadastrar",
+        "não quero mais",
+    ),
     Intent.PRICING: ("preço", "valor", "custo", "quanto custa", "tabela", "orçamento"),
     Intent.SCHEDULING: (
-        "agendar", "marcar", "horário", "consulta", "encaixe", "remarcar",
-        "disponibilidade", "quando posso",
+        "agendar",
+        "marcar",
+        "horário",
+        "consulta",
+        "encaixe",
+        "remarcar",
+        "disponibilidade",
+        "quando posso",
     ),
     Intent.GREETING: ("oi", "olá", "bom dia", "boa tarde", "boa noite"),
     Intent.INFORMATION: ("endereço", "horário de funcionamento", "telefone", "onde fica"),
@@ -76,14 +103,14 @@ _SYSTEM_PROMPT = (
     '- "greeting"     -> saudacao ou mensagem de abertura\n'
     '- "opt_out"      -> cliente quer parar de receber mensagens\n'
     '- "other"        -> qualquer outra coisa\n\n'
-    'Responda APENAS com o JSON, sem texto adicional. Exemplo:\n'
+    "Responda APENAS com o JSON, sem texto adicional. Exemplo:\n"
     '{"intent": "scheduling", "confidence": 0.95}'
 )
 
 
 async def _llm_classify(message: str, api_key: str, model: str) -> tuple[Intent, float]:
     """Call Claude Haiku and parse the JSON response. Returns (intent, confidence)."""
-    from anthropic import AsyncAnthropic  # noqa: PLC0415
+    from anthropic import AsyncAnthropic
 
     client = AsyncAnthropic(api_key=api_key)
     response = await client.messages.create(
@@ -126,7 +153,7 @@ async def classify_intent(state: AgentState) -> dict[str, object]:
         Partial state with `intent` set (and optionally `confidence` pre-set
         from the LLM when available).
     """
-    from ...core.config import get_settings  # noqa: PLC0415
+    from ...core.config import get_settings
 
     message = state.get("user_message", "")
     if not message:
@@ -163,7 +190,7 @@ async def classify_intent(state: AgentState) -> dict[str, object]:
                 message_len=len(message),
             )
             return {"intent": intent, "confidence": confidence}
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning(
                 "classify_intent.llm_error",
                 tenant_id=state.get("tenant_id"),

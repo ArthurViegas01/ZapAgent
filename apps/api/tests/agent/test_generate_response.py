@@ -6,13 +6,11 @@ import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 import src.agent.nodes  # noqa: F401
+
 _gr_mod = sys.modules["src.agent.nodes.generate_response"]
 
-from src.agent.nodes.generate_response import _FALLBACK_REPLY, _GREETING_REPLY
-from src.agent.nodes.generate_response import generate_response
+from src.agent.nodes.generate_response import _FALLBACK_REPLY, _GREETING_REPLY, generate_response
 from src.agent.state import AgentState, Intent
 from src.core.config import get_settings
 

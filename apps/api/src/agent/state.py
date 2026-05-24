@@ -7,17 +7,11 @@ that diff, not on global side effects.
 
 from __future__ import annotations
 
-import sys
+from enum import StrEnum
 from typing import Any, TypedDict
 
-if sys.version_info >= (3, 11):
-    from enum import StrEnum
-else:
-    # Compatibility shim for Python 3.10 (used in CI / local dev with 3.10).
-    from enum import Enum
-
-    class StrEnum(str, Enum):  # type: ignore[no-redef]
-        pass
+# Project requires Python >= 3.11 (pyproject.toml) so StrEnum is always
+# available natively; the prior compat shim for 3.10 has been removed.
 
 
 class Intent(StrEnum):
@@ -45,7 +39,7 @@ class AppointmentDraft(TypedDict, total=False):
 
     title: str
     starts_at: str  # ISO 8601
-    ends_at: str    # ISO 8601
+    ends_at: str  # ISO 8601
     notes: str
 
 
@@ -67,23 +61,23 @@ class AgentState(TypedDict, total=False):
 
     # -- Filled by retrieve_context ---------------------------------------
     faq_matches: list[FaqMatch]
-    history: list[dict[str, Any]]    # prior {role, content} turns
+    history: list[dict[str, Any]]  # prior {role, content} turns
 
     # -- Filled by generate_response --------------------------------------
     response: str
-    token_usage: dict[str, int]      # {input, output, cached}
+    token_usage: dict[str, int]  # {input, output, cached}
 
     # -- Filled by check_confidence ---------------------------------------
     confidence: float
-    next_action: str                  # respond | schedule | handoff
+    next_action: str  # respond | schedule | handoff
 
     # -- Filled by schedule_appointment ----------------------------------
     appointment: AppointmentDraft
-    appointment_id: str               # populated after Calendar insert
+    appointment_id: str  # populated after Calendar insert
 
     # -- Filled by handoff_human ------------------------------------------
     handoff_reason: str
-    handoff_notified_at: str          # ISO 8601
+    handoff_notified_at: str  # ISO 8601
 
     # -- Optional: injected by router before graph.invoke -----------------
-    tenant_settings: dict[str, str]   # name, persona, business_hours, phone
+    tenant_settings: dict[str, str]  # name, persona, business_hours, phone

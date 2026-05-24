@@ -38,9 +38,7 @@ class Settings(BaseSettings):
     database_url: PostgresDsn = Field(
         default="postgresql+psycopg://zapagent:zapagent_local_dev@postgres:5432/zapagent"
     )
-    database_url_sync: str = (
-        "postgresql://zapagent:zapagent_local_dev@postgres:5432/zapagent"
-    )
+    database_url_sync: str = "postgresql://zapagent:zapagent_local_dev@postgres:5432/zapagent"
 
     # -- Supabase ----------------------------------------------------------
     supabase_url: str = ""

@@ -26,7 +26,7 @@ doesn't need to know billing terminology.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from .logging import get_logger
@@ -66,9 +66,7 @@ _MSG_SUSPENDED = (
     "Vamos retornar assim que regularizarmos o seu acesso. "
     "Pedimos desculpas pelo inconveniente."
 )
-_MSG_UNKNOWN_TENANT = (
-    "Olá! Esta conta ainda não está configurada para atendimento automático."
-)
+_MSG_UNKNOWN_TENANT = "Olá! Esta conta ainda não está configurada para atendimento automático."
 
 
 async def check_subscription(pool: Any, tenant_id: str) -> GateResult:
@@ -99,8 +97,7 @@ async def check_subscription(pool: Any, tenant_id: str) -> GateResult:
     """
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT subscription_status, trial_ends_at "
-            "FROM tenants WHERE id = $1::uuid LIMIT 1",
+            "SELECT subscription_status, trial_ends_at FROM tenants WHERE id = $1::uuid LIMIT 1",
             tenant_id,
         )
 
@@ -163,7 +160,7 @@ async def check_subscription(pool: Any, tenant_id: str) -> GateResult:
             reason="trialing_no_end",
         )
 
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     remaining = trial_ends_at - now
     days_left = max(0, remaining.days)
 

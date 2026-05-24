@@ -76,7 +76,22 @@ extend-exclude = ["alembic/versions"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "N", "SIM", "RUF"]
-ignore = ["E501"]
+# B008 (function-call-in-default-arg) fires on every FastAPI route that
+# uses Depends() or Security() — that's literally the framework idiom,
+# not a bug. Disabling it globally is cleaner than 20 noqas.
+ignore = ["E501", "B008"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests that need to import a module AFTER patching sys.modules to wire
+# in a stub for an optional dep (anthropic, voyageai). Module-level
+# import ordering is intentional here.
+"tests/agent/test_generate_response.py" = ["E402"]
+"tests/agent/test_retrieve_context.py" = ["E402"]
+# worker.tasks reraises Celery's `self.retry(exc=exc)` deliberately
+# without `from`: Celery's machinery inspects the bare exception to
+# decide retry/permanent-failure semantics. Using `raise ... from exc`
+# would shadow the original traceback chain Celery already preserves.
+"src/worker/tasks.py" = ["B904"]
 
 [tool.mypy]
 python_version = "3.11"

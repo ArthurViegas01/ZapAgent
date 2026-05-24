@@ -31,6 +31,7 @@ router = APIRouter(prefix="/v1/tenants/{tenant_id}/faq", tags=["faq"])
 # Schemas
 # ---------------------------------------------------------------------------
 
+
 class FaqItemOut(BaseModel):
     id: str
     question: str
@@ -54,36 +55,39 @@ class FaqUpdate(BaseModel):
 # Embedding helper
 # ---------------------------------------------------------------------------
 
+
 async def _reindex_faq(pool: Any, faq_id: str, tenant_id: str, text: str) -> None:
     """Generate embedding and persist to faq_items.embedding (best-effort)."""
     settings = get_settings()
     if not settings.voyage_api_key:
         return
     try:
-        import voyageai  # noqa: PLC0415
+        import voyageai
 
         client = voyageai.AsyncClient(api_key=settings.voyage_api_key)
         # 1024 matches faq_items.embedding VECTOR(1024); voyage-3-lite defaults to 512.
-        result = await client.embed(texts=[text], model=settings.voyage_model, output_dimension=1024)
+        result = await client.embed(
+            texts=[text], model=settings.voyage_model, output_dimension=1024
+        )
         embedding = result.embeddings[0]
         vec_lit = "[" + ",".join(f"{x:.8f}" for x in embedding) + "]"
 
-        async with pool.acquire() as conn:
-            async with conn.transaction():
-                await conn.execute("SELECT set_config('app.tenant_id', $1, true)", tenant_id)
-                await conn.execute(
-                    "UPDATE faq_items SET embedding = $1::vector WHERE id = $2::uuid",
-                    vec_lit,
-                    faq_id,
-                )
+        async with pool.acquire() as conn, conn.transaction():
+            await conn.execute("SELECT set_config('app.tenant_id', $1, true)", tenant_id)
+            await conn.execute(
+                "UPDATE faq_items SET embedding = $1::vector WHERE id = $2::uuid",
+                vec_lit,
+                faq_id,
+            )
         logger.info("faq.reindexed", faq_id=faq_id)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("faq.reindex_failed", faq_id=faq_id, error=str(exc))
 
 
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
 
 @router.get("", response_model=list[FaqItemOut])
 async def list_faq(
@@ -125,7 +129,10 @@ async def create_faq(
 
     item = FaqItemOut(**dict(row))
     # Fire-and-forget re-indexing (don't await so HTTP response is fast).
-    asyncio.create_task(
+    # The task is intentionally not retained — completion is irrelevant to
+    # the caller, and the asyncio event loop keeps its own reference via
+    # all_tasks() while it runs. Disabling RUF006 here documents intent.
+    asyncio.create_task(  # noqa: RUF006
         _reindex_faq(ctx.pool, item.id, ctx.tenant_id, f"{body.question}\n{body.answer}")
     )
     return item
@@ -175,7 +182,8 @@ async def update_faq(
     if body.question or body.answer:
         q = body.question or item.question
         a = body.answer or item.answer
-        asyncio.create_task(
+        # Fire-and-forget — see comment on the create-handler above.
+        asyncio.create_task(  # noqa: RUF006
             _reindex_faq(ctx.pool, item.id, ctx.tenant_id, f"{q}\n{a}")
         )
     return item

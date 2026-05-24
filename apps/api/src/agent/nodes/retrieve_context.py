@@ -42,7 +42,7 @@ async def _embed(text: str) -> list[float]:
 
     Import is deferred to avoid startup cost when no key is set.
     """
-    import voyageai  # noqa: PLC0415
+    import voyageai
 
     settings = get_settings()
     client = voyageai.AsyncClient(api_key=settings.voyage_api_key)
@@ -64,20 +64,19 @@ async def _query_faq(
     SET LOCAL app.tenant_id satisfies the RLS policy defined in the
     migration (current_tenant_id() reads from that GUC).
     """
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            await conn.execute("SELECT set_config('app.tenant_id', $1, true)", tenant_id)
-            rows = await conn.fetch(
-                "SELECT id::text, question, answer,"
-                " (1 - (embedding <=> $1::vector))::float AS score"
-                " FROM faq_items"
-                " WHERE tenant_id = $2::uuid AND is_active"
-                " ORDER BY embedding <=> $1::vector"
-                " LIMIT $3",
-                vec_lit,
-                tenant_id,
-                top_k,
-            )
+    async with pool.acquire() as conn, conn.transaction():
+        await conn.execute("SELECT set_config('app.tenant_id', $1, true)", tenant_id)
+        rows = await conn.fetch(
+            "SELECT id::text, question, answer,"
+            " (1 - (embedding <=> $1::vector))::float AS score"
+            " FROM faq_items"
+            " WHERE tenant_id = $2::uuid AND is_active"
+            " ORDER BY embedding <=> $1::vector"
+            " LIMIT $3",
+            vec_lit,
+            tenant_id,
+            top_k,
+        )
     return [
         FaqMatch(
             id=row["id"],
@@ -127,7 +126,8 @@ async def retrieve_context(
     # the framework before the node is invoked, observed empirically on
     # 2026-05-24). Read the pool from a task-scoped contextvar instead;
     # see src/agent/context.py for the rationale.
-    from ..context import get_db_pool  # noqa: PLC0415
+    from ..context import get_db_pool
+
     pool: Any | None = get_db_pool()
     # Backwards-compat: still honor a pool passed via LangGraph config
     # if a future framework version re-enables it.

@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 import pytest
 import pytest_asyncio
@@ -56,7 +56,7 @@ def _resolve_dsn() -> str:
     (``postgresql+psycopg://...``) and a plain Postgres URL in
     ``database_url_sync``. asyncpg only accepts the plain form.
     """
-    from src.core.config import get_settings  # noqa: PLC0415
+    from src.core.config import get_settings
 
     settings = get_settings()
     raw = settings.database_url_sync or os.environ.get("DATABASE_URL_SYNC", "")
@@ -70,7 +70,7 @@ async def _try_connect(dsn: str) -> bool:
         return False
     try:
         conn = await asyncpg.connect(dsn, timeout=3)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
     try:
         await conn.execute("SELECT 1")
@@ -91,7 +91,7 @@ async def integration_dsn() -> str:
 
 
 @pytest_asyncio.fixture(scope="session")
-async def integration_pool(integration_dsn: str) -> AsyncIterator["asyncpg.Pool"]:
+async def integration_pool(integration_dsn: str) -> AsyncIterator[asyncpg.Pool]:
     """Session-scoped asyncpg pool used by every integration test."""
     assert asyncpg is not None
     pool = await asyncpg.create_pool(
@@ -107,7 +107,7 @@ async def integration_pool(integration_dsn: str) -> AsyncIterator["asyncpg.Pool"
 
 
 @pytest_asyncio.fixture(scope="session")
-async def _ensure_test_role(integration_pool: "asyncpg.Pool") -> None:
+async def _ensure_test_role(integration_pool: asyncpg.Pool) -> None:
     """Create ``app_user_test`` with NOBYPASSRLS, idempotently.
 
     The role is used to assert RLS policies actually fire. We do NOT
@@ -115,13 +115,9 @@ async def _ensure_test_role(integration_pool: "asyncpg.Pool") -> None:
     bare minimum needed to read/write tenant-scoped tables.
     """
     async with integration_pool.acquire() as conn:
-        exists = await conn.fetchval(
-            "SELECT 1 FROM pg_roles WHERE rolname = 'app_user_test'"
-        )
+        exists = await conn.fetchval("SELECT 1 FROM pg_roles WHERE rolname = 'app_user_test'")
         if not exists:
-            await conn.execute(
-                "CREATE ROLE app_user_test NOLOGIN NOINHERIT NOBYPASSRLS"
-            )
+            await conn.execute("CREATE ROLE app_user_test NOLOGIN NOINHERIT NOBYPASSRLS")
         # Grants are idempotent — re-running is cheap.
         await conn.execute(
             "GRANT SELECT, INSERT, UPDATE, DELETE "
@@ -133,7 +129,7 @@ async def _ensure_test_role(integration_pool: "asyncpg.Pool") -> None:
 
 @pytest_asyncio.fixture(loop_scope="session")
 async def two_tenants(
-    integration_pool: "asyncpg.Pool",
+    integration_pool: asyncpg.Pool,
     _ensure_test_role: None,
 ) -> AsyncIterator[dict[str, uuid.UUID]]:
     """Seed two disjoint tenants and clean up after the test.

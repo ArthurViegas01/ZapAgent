@@ -49,7 +49,7 @@ class InboundMessage:
 
     instance_name: str
     provider_message_id: str  # used for idempotency
-    contact_phone: str        # E.164-ish digits, no @s.whatsapp.net suffix
+    contact_phone: str  # E.164-ish digits, no @s.whatsapp.net suffix
     contact_name: str | None
     text: str
     is_from_me: bool

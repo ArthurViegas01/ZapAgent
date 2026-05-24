@@ -41,8 +41,9 @@ for the per-process ``_setup_done_for_dsn`` cache.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator
+from typing import Any
 
 from src.core.config import get_settings
 from src.core.logging import get_logger
@@ -82,8 +83,8 @@ async def async_postgres_saver_scope() -> AsyncIterator[Any]:
     global _setup_done_for_dsn
 
     # Lazy imports keep the module import side-effect-free.
-    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver  # noqa: PLC0415
-    from psycopg_pool import AsyncConnectionPool  # noqa: PLC0415
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+    from psycopg_pool import AsyncConnectionPool
 
     dsn = _psycopg_dsn()
     pool = AsyncConnectionPool(
@@ -106,7 +107,7 @@ async def async_postgres_saver_scope() -> AsyncIterator[Any]:
     finally:
         try:
             await pool.close()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("checkpointer.pool_close_failed", error=str(exc))
 
 
@@ -118,8 +119,8 @@ async def get_async_postgres_saver() -> Any:
     and saver and never closes them — the loop's exit cleans up via GC.
     Do **not** use from Celery tasks (use the context manager instead).
     """
-    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver  # noqa: PLC0415
-    from psycopg_pool import AsyncConnectionPool  # noqa: PLC0415
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+    from psycopg_pool import AsyncConnectionPool
 
     global _setup_done_for_dsn
     dsn = _psycopg_dsn()

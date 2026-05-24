@@ -22,10 +22,10 @@ from src.integrations.whatsapp import (
 from src.integrations.whatsapp.evolution import EvolutionProvider
 from src.integrations.whatsapp.stub import StubProvider
 
-
 # ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
+
 
 def test_factory_returns_evolution_by_default():
     s = get_settings()
@@ -48,6 +48,7 @@ def test_factory_returns_stub_when_configured():
 # ---------------------------------------------------------------------------
 # StubProvider full contract
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def stub() -> StubProvider:
@@ -107,6 +108,7 @@ def test_stub_ignores_unknown_event(stub: StubProvider):
 # EvolutionProvider parsing
 # ---------------------------------------------------------------------------
 
+
 def test_evolution_event_classification():
     s = get_settings()
     s.whatsapp_provider = "evolution"
@@ -125,23 +127,27 @@ def test_evolution_parses_inbound_text_and_caption():
     reset_provider()
     p = get_whatsapp_provider()
 
-    plain = p.parse_inbound_message({
-        "instance": "inst",
-        "data": {
-            "key": {"remoteJid": "5511@s.whatsapp.net", "fromMe": False, "id": "M1"},
-            "message": {"conversation": "Bom dia"},
-            "pushName": "X",
-        },
-    })
+    plain = p.parse_inbound_message(
+        {
+            "instance": "inst",
+            "data": {
+                "key": {"remoteJid": "5511@s.whatsapp.net", "fromMe": False, "id": "M1"},
+                "message": {"conversation": "Bom dia"},
+                "pushName": "X",
+            },
+        }
+    )
     assert plain is not None and plain.text == "Bom dia"
 
-    caption = p.parse_inbound_message({
-        "instance": "inst",
-        "data": {
-            "key": {"remoteJid": "5511@s.whatsapp.net", "fromMe": False, "id": "M2"},
-            "message": {"imageMessage": {"caption": "  legenda  "}},
-        },
-    })
+    caption = p.parse_inbound_message(
+        {
+            "instance": "inst",
+            "data": {
+                "key": {"remoteJid": "5511@s.whatsapp.net", "fromMe": False, "id": "M2"},
+                "message": {"imageMessage": {"caption": "  legenda  "}},
+            },
+        }
+    )
     assert caption is not None and caption.text == "legenda"
 
 
@@ -150,13 +156,23 @@ def test_evolution_ignores_outbound_and_no_text():
     s.whatsapp_provider = "evolution"
     reset_provider()
     p = get_whatsapp_provider()
-    out = p.parse_inbound_message({
-        "data": {"key": {"fromMe": True, "remoteJid": "5511@x", "id": "M"}, "message": {"conversation": "hi"}}
-    })
+    out = p.parse_inbound_message(
+        {
+            "data": {
+                "key": {"fromMe": True, "remoteJid": "5511@x", "id": "M"},
+                "message": {"conversation": "hi"},
+            }
+        }
+    )
     assert out is None
-    none = p.parse_inbound_message({
-        "data": {"key": {"fromMe": False, "remoteJid": "5511@x", "id": "M"}, "message": {"stickerMessage": {}}}
-    })
+    none = p.parse_inbound_message(
+        {
+            "data": {
+                "key": {"fromMe": False, "remoteJid": "5511@x", "id": "M"},
+                "message": {"stickerMessage": {}},
+            }
+        }
+    )
     assert none is None
 
 
@@ -183,6 +199,7 @@ def test_evolution_webhook_auth_open_when_token_empty():
 # ---------------------------------------------------------------------------
 # Provider is a real ABC -- subclasses must implement the surface
 # ---------------------------------------------------------------------------
+
 
 def test_provider_is_abstract():
     with pytest.raises(TypeError):

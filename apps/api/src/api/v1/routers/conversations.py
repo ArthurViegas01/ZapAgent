@@ -23,6 +23,7 @@ router = APIRouter(prefix="/v1/tenants/{tenant_id}/conversations", tags=["conver
 # Schemas
 # ---------------------------------------------------------------------------
 
+
 class ConversationOut(BaseModel):
     id: str
     contact_phone: str
@@ -47,6 +48,7 @@ class MessageOut(BaseModel):
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
 
 @router.get("", response_model=list[ConversationOut])
 async def list_conversations(
@@ -107,7 +109,9 @@ async def list_messages(
             ctx.tenant_id,
         )
         if not exists:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found.")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found."
+            )
 
         rows = await conn.fetch(
             "SELECT id::text, direction, role, content, intent, "

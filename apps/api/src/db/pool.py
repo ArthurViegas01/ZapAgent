@@ -19,8 +19,8 @@ Usage in Celery tasks:
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 import asyncpg
 
@@ -38,9 +38,7 @@ async def create_pool() -> asyncpg.Pool:
     """
     settings = get_settings()
     # asyncpg needs the plain postgres:// URL (not the SQLAlchemy +psycopg one).
-    url = settings.database_url_sync.replace(
-        "postgresql://", "postgres://"
-    )
+    url = settings.database_url_sync.replace("postgresql://", "postgres://")
     pool = await asyncpg.create_pool(
         dsn=url,
         min_size=2,
@@ -65,5 +63,5 @@ async def worker_pool_scope() -> AsyncIterator[asyncpg.Pool]:
     finally:
         try:
             await pool.close()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("db.pool.close_failed", error=str(exc))

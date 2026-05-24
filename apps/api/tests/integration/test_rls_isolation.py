@@ -30,8 +30,6 @@ All tests carry ``@pytest.mark.integration``. The CI workflow opts in via
 
 from __future__ import annotations
 
-import uuid
-
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio(loop_scope="session")]
@@ -41,6 +39,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.asyncio(loop_scope="session")
 # 1. RLS via GUC actually isolates rows under a NOBYPASSRLS role
 # ---------------------------------------------------------------------------
 
+
 async def test_rls_guc_isolates_faq_items(integration_pool, two_tenants):
     """With role app_user_test, SET LOCAL app.tenant_id = A ⇒ only A's rows.
 
@@ -49,46 +48,40 @@ async def test_rls_guc_isolates_faq_items(integration_pool, two_tenants):
       - GUC = B returns only B's 2 FAQ rows
       - No GUC returns 0 rows (RLS rejects the read)
     """
-    async with integration_pool.acquire() as conn:
-        async with conn.transaction():
-            # Switch to the low-privilege role for this transaction only.
-            await conn.execute("SET LOCAL ROLE app_user_test")
+    async with integration_pool.acquire() as conn, conn.transaction():
+        # Switch to the low-privilege role for this transaction only.
+        await conn.execute("SET LOCAL ROLE app_user_test")
 
-            # -- GUC = A ----------------------------------------------
-            await conn.execute(
-                "SELECT set_config('app.tenant_id', $1, true)", str(two_tenants["a_id"])
-            )
-            rows_a = await conn.fetch("SELECT tenant_id FROM faq_items")
-            assert len(rows_a) == 2, (
-                "expected exactly the 2 FAQ rows seeded for tenant A, "
-                f"got {len(rows_a)} — RLS may be bypassed or policy missing"
-            )
-            assert all(r["tenant_id"] == two_tenants["a_id"] for r in rows_a)
+        # -- GUC = A ----------------------------------------------
+        await conn.execute("SELECT set_config('app.tenant_id', $1, true)", str(two_tenants["a_id"]))
+        rows_a = await conn.fetch("SELECT tenant_id FROM faq_items")
+        assert len(rows_a) == 2, (
+            "expected exactly the 2 FAQ rows seeded for tenant A, "
+            f"got {len(rows_a)} — RLS may be bypassed or policy missing"
+        )
+        assert all(r["tenant_id"] == two_tenants["a_id"] for r in rows_a)
 
-            # -- GUC = B ----------------------------------------------
-            await conn.execute(
-                "SELECT set_config('app.tenant_id', $1, true)", str(two_tenants["b_id"])
-            )
-            rows_b = await conn.fetch("SELECT tenant_id FROM faq_items")
-            assert len(rows_b) == 2
-            assert all(r["tenant_id"] == two_tenants["b_id"] for r in rows_b)
+        # -- GUC = B ----------------------------------------------
+        await conn.execute("SELECT set_config('app.tenant_id', $1, true)", str(two_tenants["b_id"]))
+        rows_b = await conn.fetch("SELECT tenant_id FROM faq_items")
+        assert len(rows_b) == 2
+        assert all(r["tenant_id"] == two_tenants["b_id"] for r in rows_b)
 
-            # -- No GUC set: current_tenant_id() returns NULL ---------
-            await conn.execute("SELECT set_config('app.tenant_id', '', true)")
-            rows_none = await conn.fetch("SELECT tenant_id FROM faq_items")
-            assert rows_none == [], (
-                "expected zero rows when app.tenant_id is unset — "
-                "tenant_isolation policy may have a faulty USING clause"
-            )
+        # -- No GUC set: current_tenant_id() returns NULL ---------
+        await conn.execute("SELECT set_config('app.tenant_id', '', true)")
+        rows_none = await conn.fetch("SELECT tenant_id FROM faq_items")
+        assert rows_none == [], (
+            "expected zero rows when app.tenant_id is unset — "
+            "tenant_isolation policy may have a faulty USING clause"
+        )
 
 
 # ---------------------------------------------------------------------------
 # 2. The actual helper used by the agent isolates tenants
 # ---------------------------------------------------------------------------
 
-async def test_retrieve_context_query_faq_isolates_tenants(
-    integration_pool, two_tenants
-):
+
+async def test_retrieve_context_query_faq_isolates_tenants(integration_pool, two_tenants):
     """``_query_faq`` is the FAQ retrieval call inside ``retrieve_context``.
 
     We bypass the embedding step (which would require a Voyage AI key)
@@ -117,35 +110,27 @@ async def test_retrieve_context_query_faq_isolates_tenants(
 
     # Hard count: exactly the 2 rows we seeded per tenant. Anything else
     # means the WHERE tenant_id filter slipped or the seed is wrong.
-    assert len(matches_a) == 2, (
-        f"tenant A expected 2 FAQ matches, got {len(matches_a)}"
-    )
-    assert len(matches_b) == 2, (
-        f"tenant B expected 2 FAQ matches, got {len(matches_b)}"
-    )
+    assert len(matches_a) == 2, f"tenant A expected 2 FAQ matches, got {len(matches_a)}"
+    assert len(matches_b) == 2, f"tenant B expected 2 FAQ matches, got {len(matches_b)}"
 
     a_ids = {m["id"] for m in matches_a}
     b_ids = {m["id"] for m in matches_b}
     assert not (a_ids & b_ids), (
-        "FAQ retrieval leaked rows across tenants — overlap: "
-        f"{sorted(a_ids & b_ids)}"
+        f"FAQ retrieval leaked rows across tenants — overlap: {sorted(a_ids & b_ids)}"
     )
 
     # Every returned question must belong to the requested tenant. We
     # have distinct text per tenant in the fixture (Horario A? vs B?).
     for m in matches_a:
-        assert m["question"].endswith("A?"), (
-            f"tenant A retrieval returned a non-A row: {m}"
-        )
+        assert m["question"].endswith("A?"), f"tenant A retrieval returned a non-A row: {m}"
     for m in matches_b:
-        assert m["question"].endswith("B?"), (
-            f"tenant B retrieval returned a non-B row: {m}"
-        )
+        assert m["question"].endswith("B?"), f"tenant B retrieval returned a non-B row: {m}"
 
 
 # ---------------------------------------------------------------------------
 # 3. Webhook tenant resolution doesn't mix instances
 # ---------------------------------------------------------------------------
+
 
 async def test_resolve_tenant_by_instance_name(integration_pool, two_tenants):
     """``webhooks.whatsapp._resolve_tenant`` maps instance → tenant cleanly."""

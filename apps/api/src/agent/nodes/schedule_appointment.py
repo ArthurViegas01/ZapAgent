@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -36,8 +36,9 @@ TOKEN_REFRESH_BUFFER_SECS = 300  # refresh if expiring within 5 min
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _placeholder_draft(state: AgentState) -> AppointmentDraft:
-    starts = datetime.now(tz=timezone.utc) + timedelta(days=1)
+    starts = datetime.now(tz=UTC) + timedelta(days=1)
     ends = starts + timedelta(minutes=30)
     return AppointmentDraft(
         title="Atendimento - " + state.get("contact_phone", "cliente"),
@@ -78,7 +79,7 @@ async def _refresh_token_if_needed(
     expires_at: float = float(secrets.get("expires_at", 0))
     refresh_token: str = secrets.get("refresh_token", "")
 
-    now_ts = datetime.now(tz=timezone.utc).timestamp()
+    now_ts = datetime.now(tz=UTC).timestamp()
     if expires_at - now_ts > TOKEN_REFRESH_BUFFER_SECS:
         return access_token
 
@@ -125,9 +126,7 @@ async def _create_calendar_event(
     event_body = {
         "summary": draft.get("title", "Atendimento Encaixe"),
         "description": (
-            "Agendado via Encaixe.\n"
-            "Contato: " + contact_phone + "\n"
-            + (draft.get("notes") or "")
+            "Agendado via Encaixe.\nContato: " + contact_phone + "\n" + (draft.get("notes") or "")
         ).strip(),
         "start": {"dateTime": draft.get("starts_at"), "timeZone": "America/Sao_Paulo"},
         "end": {"dateTime": draft.get("ends_at"), "timeZone": "America/Sao_Paulo"},
@@ -191,6 +190,7 @@ def _format_confirmation(draft: AppointmentDraft) -> str:
 # ---------------------------------------------------------------------------
 # Node
 # ---------------------------------------------------------------------------
+
 
 async def schedule_appointment(
     state: AgentState,
@@ -262,7 +262,7 @@ async def schedule_appointment(
             google_event_id=google_event_id,
         )
 
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.error("schedule_appointment.failed", error=str(exc), tenant_id=tenant_id)
         # Still return a confirmation to the user - operator can handle manually
         return {

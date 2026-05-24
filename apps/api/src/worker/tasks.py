@@ -35,7 +35,7 @@ async def _load_tenant_settings(pool: Any, tenant_id: str) -> dict[str, Any]:
         s: dict[str, Any] = raw if isinstance(raw, dict) else {}
         hours = s.get("business_hours")
         if hours:
-            bh = f"Segunda a sexta, {hours.get('open','09:00')} as {hours.get('close','18:00')}."
+            bh = f"Segunda a sexta, {hours.get('open', '09:00')} as {hours.get('close', '18:00')}."
         else:
             bh = "Segunda a sexta, 9h as 18h."
         return {
@@ -43,12 +43,13 @@ async def _load_tenant_settings(pool: Any, tenant_id: str) -> dict[str, Any]:
             "persona": s.get("agent_persona", "Atendente educado e prestativo."),
             "business_hours": bh,
             "phone": s.get("owner_phone", "nao disponivel"),
-            "confidence_threshold": s.get("confidence_threshold", settings.agent_confidence_threshold),
+            "confidence_threshold": s.get(
+                "confidence_threshold", settings.agent_confidence_threshold
+            ),
         }
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("worker.load_settings_failed", tenant_id=tenant_id, error=str(exc))
         return {}
-
 
 
 async def _check_opted_out(pool: Any, tenant_id: str, contact_phone: str) -> bool:
@@ -62,7 +63,7 @@ async def _check_opted_out(pool: Any, tenant_id: str, contact_phone: str) -> boo
                 contact_phone,
             )
         return bool(row and row["opted_out"])
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("worker.opted_out_check_failed", error=str(exc))
         return False
 
@@ -77,7 +78,7 @@ async def _mark_opted_out(pool: Any, tenant_id: str, conversation_id: str) -> No
                 conversation_id,
                 tenant_id,
             )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("worker.mark_opted_out_failed", error=str(exc))
 
 
@@ -89,10 +90,10 @@ async def _run_agent(
     tenant_settings: dict[str, Any],
     pool: Any,
 ) -> dict:
-    from src.agent.checkpointer import async_postgres_saver_scope  # noqa: PLC0415
-    from src.agent.context import set_db_pool  # noqa: PLC0415
-    from src.agent.graph import build_graph  # noqa: PLC0415
-    from src.agent.state import AgentState  # noqa: PLC0415
+    from src.agent.checkpointer import async_postgres_saver_scope
+    from src.agent.context import set_db_pool
+    from src.agent.graph import build_graph
+    from src.agent.state import AgentState
 
     # Thread the pool to retrieve_context via a task-scoped contextvar.
     # LangGraph's `configurable` slot filters out our db_pool key, so
@@ -124,7 +125,7 @@ async def _run_agent(
         async with async_postgres_saver_scope() as checkpointer:
             graph = build_graph(checkpointer=checkpointer)
             return await graph.ainvoke(state, config=config)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning(
             "worker.checkpointer_fallback_to_memory",
             error=str(exc),
@@ -141,7 +142,7 @@ async def _send_whatsapp_reply(instance_name: str, contact_phone: str, text: str
     Stub mode short-circuits the network call and writes to a debug log so
     end-to-end tests can run without an Evolution / WPP / Cloud API account.
     """
-    from src.integrations.whatsapp.factory import get_whatsapp_provider  # noqa: PLC0415
+    from src.integrations.whatsapp.factory import get_whatsapp_provider
 
     provider = get_whatsapp_provider()
     await provider.send_text(instance_name=instance_name, phone=contact_phone, text=text)
@@ -153,7 +154,9 @@ async def _send_whatsapp_reply(instance_name: str, contact_phone: str, text: str
     )
 
 
-async def _persist_outbound(pool: Any, tenant_id: str, conversation_id: str, content: str, final_state: dict) -> None:
+async def _persist_outbound(
+    pool: Any, tenant_id: str, conversation_id: str, content: str, final_state: dict
+) -> None:
     async with pool.acquire() as conn:
         await conn.execute(
             "INSERT INTO messages "
@@ -171,8 +174,10 @@ async def _persist_outbound(pool: Any, tenant_id: str, conversation_id: str, con
 @app.task(name="tasks.purge_old_messages")
 def purge_old_messages() -> dict:
     """Nightly LGPD retention: delete messages older than each tenant's retention window."""
+
     async def _run() -> dict:
-        from src.db.pool import worker_pool_scope  # noqa: PLC0415
+        from src.db.pool import worker_pool_scope
+
         async with worker_pool_scope() as pool:
             async with pool.acquire() as conn:
                 result = await conn.fetchrow(
@@ -201,10 +206,15 @@ def process_whatsapp_message(
     instance_name: str = "",
 ) -> dict:
     """Run the LangGraph agent for an inbound WhatsApp message."""
-    logger.info("worker.task.started", tenant_id=tenant_id, conversation_id=conversation_id, instance=instance_name)
+    logger.info(
+        "worker.task.started",
+        tenant_id=tenant_id,
+        conversation_id=conversation_id,
+        instance=instance_name,
+    )
 
     async def _main() -> dict:
-        from src.db.pool import worker_pool_scope  # noqa: PLC0415
+        from src.db.pool import worker_pool_scope
 
         # Pool is task-scoped: opens in this loop, closes when this loop
         # exits. Sharing a pool across asyncio.run() calls crashes with
@@ -212,8 +222,14 @@ def process_whatsapp_message(
         async with worker_pool_scope() as pool:
             # Skip opted-out contacts — do not run agent or reply.
             if await _check_opted_out(pool, tenant_id, contact_phone):
-                logger.info("worker.opted_out_skip", tenant_id=tenant_id, contact_phone=contact_phone)
-                return {"conversation_id": conversation_id, "next_action": "opted_out", "response": ""}
+                logger.info(
+                    "worker.opted_out_skip", tenant_id=tenant_id, contact_phone=contact_phone
+                )
+                return {
+                    "conversation_id": conversation_id,
+                    "next_action": "opted_out",
+                    "response": "",
+                }
 
             tenant_settings = await _load_tenant_settings(pool, tenant_id)
             final_state = await _run_agent(
@@ -227,20 +243,23 @@ def process_whatsapp_message(
             response_text: str = final_state.get("response", "")
 
             # Persist opt-out if the agent classified the message as OPT_OUT.
-            from src.agent.state import Intent as _Intent  # noqa: PLC0415
+            from src.agent.state import Intent as _Intent
+
             if final_state.get("intent") == _Intent.OPT_OUT:
                 await _mark_opted_out(pool, tenant_id, conversation_id)
 
             if instance_name and response_text:
                 try:
                     await _send_whatsapp_reply(instance_name, contact_phone, response_text)
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     logger.error("worker.reply_failed", error=str(exc))
 
             if response_text:
                 try:
-                    await _persist_outbound(pool, tenant_id, conversation_id, response_text, final_state)
-                except Exception as exc:  # noqa: BLE001
+                    await _persist_outbound(
+                        pool, tenant_id, conversation_id, response_text, final_state
+                    )
+                except Exception as exc:
                     logger.error("worker.persist_failed", error=str(exc))
 
             return {
@@ -251,14 +270,21 @@ def process_whatsapp_message(
 
     try:
         result = asyncio.run(_main())
-        logger.info("worker.task.done", conversation_id=conversation_id, next_action=result.get("next_action"))
+        logger.info(
+            "worker.task.done",
+            conversation_id=conversation_id,
+            next_action=result.get("next_action"),
+        )
         return result
     except Exception as exc:
         logger.error("worker.task.error", error=str(exc))
         # Don't retry permanent API errors (billing / auth) — retrying won't fix them
         # and causes cascading asyncpg connection issues in the worker.
         error_msg = str(exc).lower()
-        if any(k in error_msg for k in ("credit balance", "too low", "invalid_api_key", "authentication")):
+        if any(
+            k in error_msg
+            for k in ("credit balance", "too low", "invalid_api_key", "authentication")
+        ):
             logger.error("worker.task.permanent_error", reason="billing_or_auth", error=str(exc))
             return {"conversation_id": conversation_id, "error": str(exc), "permanent": True}
         raise self.retry(exc=exc)

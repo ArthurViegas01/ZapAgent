@@ -27,7 +27,6 @@ from fastapi.testclient import TestClient
 
 from src.main import create_app
 
-
 # ---------------------------------------------------------------------------
 # Constantes de teste
 # ---------------------------------------------------------------------------
@@ -82,6 +81,7 @@ CONNECTION_DISCONNECTED_BODY: dict[str, Any] = {
 # Helpers de mock
 # ---------------------------------------------------------------------------
 
+
 def _make_mock_pool(tenant_id: str | None = "tenant-uuid-001") -> MagicMock:
     """Cria um mock asyncpg Pool com valores previsiveis."""
     pool = MagicMock()
@@ -93,12 +93,14 @@ def _make_mock_pool(tenant_id: str | None = "tenant-uuid-001") -> MagicMock:
     conn.execute = AsyncMock(return_value=None)
 
     tenant_row = {"tenant_id": tenant_id} if tenant_id else None
-    conn.fetchrow = AsyncMock(side_effect=[
-        tenant_row,
-        {"id": "conv-uuid-001"},
-        {"opted_out": False},
-        {"subscription_status": "active", "trial_ends_at": None},
-    ])
+    conn.fetchrow = AsyncMock(
+        side_effect=[
+            tenant_row,
+            {"id": "conv-uuid-001"},
+            {"opted_out": False},
+            {"subscription_status": "active", "trial_ends_at": None},
+        ]
+    )
 
     return pool
 
@@ -114,6 +116,7 @@ def _make_fresh_conn(pool: MagicMock) -> AsyncMock:
 
 def _setup_webhook_token() -> None:
     from src.core.config import get_settings
+
     get_settings().evolution_webhook_token = WEBHOOK_TOKEN
 
 
@@ -124,6 +127,7 @@ def _token_headers() -> dict[str, str]:
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def client():
@@ -153,6 +157,7 @@ def app_client():
 # Autenticacao
 # ---------------------------------------------------------------------------
 
+
 def test_webhook_rejects_wrong_token(client: TestClient) -> None:
     resp = client.post(
         "/webhooks/whatsapp",
@@ -163,7 +168,7 @@ def test_webhook_rejects_wrong_token(client: TestClient) -> None:
 
 
 def test_webhook_accepts_correct_token(app_client) -> None:
-    _, pool, c = app_client
+    _, _pool, c = app_client
     with patch("src.worker.tasks.process_whatsapp_message.delay"):
         resp = c.post(
             "/webhooks/whatsapp",
@@ -176,6 +181,7 @@ def test_webhook_accepts_correct_token(app_client) -> None:
 # ---------------------------------------------------------------------------
 # Roteamento de eventos
 # ---------------------------------------------------------------------------
+
 
 def test_webhook_skips_unknown_event(client: TestClient) -> None:
     body = {"event": "MESSAGES_DELETE", "instance": INSTANCE, "data": {}}
@@ -226,6 +232,7 @@ def test_webhook_skips_non_text_message(client: TestClient) -> None:
 # Evento QRCODE_UPDATED
 # ---------------------------------------------------------------------------
 
+
 def test_webhook_stores_qr_on_qrcode_event(app_client) -> None:
     _app, pool, c = app_client
     conn = _make_fresh_conn(pool)
@@ -251,6 +258,7 @@ def test_webhook_handles_qrcode_without_pool() -> None:
 # ---------------------------------------------------------------------------
 # Evento CONNECTION_UPDATE
 # ---------------------------------------------------------------------------
+
 
 def test_webhook_marks_connected_on_open_state(app_client) -> None:
     _app, pool, c = app_client
@@ -280,6 +288,7 @@ def test_webhook_marks_pending_on_close_state(app_client) -> None:
 # Pipeline de mensagem inbound
 # ---------------------------------------------------------------------------
 
+
 def test_webhook_returns_tenant_none_when_not_found(app_client) -> None:
     _app, pool, c = app_client
     conn = _make_fresh_conn(pool)
@@ -294,12 +303,14 @@ def test_webhook_returns_tenant_none_when_not_found(app_client) -> None:
 def test_webhook_enqueues_celery_task_for_valid_message(app_client) -> None:
     _app, pool, c = app_client
     conn = _make_fresh_conn(pool)
-    conn.fetchrow = AsyncMock(side_effect=[
-        {"tenant_id": "tenant-uuid-001"},
-        {"id": "conv-uuid-001"},
-        {"opted_out": False},
-        {"subscription_status": "active", "trial_ends_at": None},
-    ])
+    conn.fetchrow = AsyncMock(
+        side_effect=[
+            {"tenant_id": "tenant-uuid-001"},
+            {"id": "conv-uuid-001"},
+            {"opted_out": False},
+            {"subscription_status": "active", "trial_ends_at": None},
+        ]
+    )
 
     with patch("src.worker.tasks.process_whatsapp_message.delay") as mock_delay:
         resp = c.post("/webhooks/whatsapp", json=INBOUND_MESSAGE_BODY, headers=_token_headers())
@@ -343,19 +354,22 @@ def test_webhook_resolves_lid_phone_before_enqueue(app_client) -> None:
     """
     _app, pool, c = app_client
     conn = _make_fresh_conn(pool)
-    conn.fetchrow = AsyncMock(side_effect=[
-        {"tenant_id": "tenant-uuid-001"},
-        {"id": "conv-uuid-001"},
-        {"opted_out": False},
-        {"subscription_status": "active", "trial_ends_at": None},
-    ])
+    conn.fetchrow = AsyncMock(
+        side_effect=[
+            {"tenant_id": "tenant-uuid-001"},
+            {"id": "conv-uuid-001"},
+            {"opted_out": False},
+            {"subscription_status": "active", "trial_ends_at": None},
+        ]
+    )
 
-    with patch(
-        "src.api.webhooks.whatsapp.resolve_lid_phone",
-        new=AsyncMock(return_value="555191079110"),
-    ) as mock_resolve, patch(
-        "src.worker.tasks.process_whatsapp_message.delay"
-    ) as mock_delay:
+    with (
+        patch(
+            "src.api.webhooks.whatsapp.resolve_lid_phone",
+            new=AsyncMock(return_value="555191079110"),
+        ) as mock_resolve,
+        patch("src.worker.tasks.process_whatsapp_message.delay") as mock_delay,
+    ):
         resp = c.post("/webhooks/whatsapp", json=LID_INBOUND_BODY, headers=_token_headers())
 
     assert resp.status_code == 200
@@ -374,19 +388,22 @@ def test_webhook_falls_through_when_lid_resolution_misses(app_client) -> None:
     """
     _app, pool, c = app_client
     conn = _make_fresh_conn(pool)
-    conn.fetchrow = AsyncMock(side_effect=[
-        {"tenant_id": "tenant-uuid-001"},
-        {"id": "conv-uuid-001"},
-        {"opted_out": False},
-        {"subscription_status": "active", "trial_ends_at": None},
-    ])
+    conn.fetchrow = AsyncMock(
+        side_effect=[
+            {"tenant_id": "tenant-uuid-001"},
+            {"id": "conv-uuid-001"},
+            {"opted_out": False},
+            {"subscription_status": "active", "trial_ends_at": None},
+        ]
+    )
 
-    with patch(
-        "src.api.webhooks.whatsapp.resolve_lid_phone",
-        new=AsyncMock(return_value=None),
-    ), patch(
-        "src.worker.tasks.process_whatsapp_message.delay"
-    ) as mock_delay:
+    with (
+        patch(
+            "src.api.webhooks.whatsapp.resolve_lid_phone",
+            new=AsyncMock(return_value=None),
+        ),
+        patch("src.worker.tasks.process_whatsapp_message.delay") as mock_delay,
+    ):
         resp = c.post("/webhooks/whatsapp", json=LID_INBOUND_BODY, headers=_token_headers())
 
     assert resp.status_code == 200
@@ -403,18 +420,21 @@ def test_webhook_skips_lid_lookup_for_regular_phone(app_client) -> None:
     """
     _app, pool, c = app_client
     conn = _make_fresh_conn(pool)
-    conn.fetchrow = AsyncMock(side_effect=[
-        {"tenant_id": "tenant-uuid-001"},
-        {"id": "conv-uuid-001"},
-        {"opted_out": False},
-        {"subscription_status": "active", "trial_ends_at": None},
-    ])
+    conn.fetchrow = AsyncMock(
+        side_effect=[
+            {"tenant_id": "tenant-uuid-001"},
+            {"id": "conv-uuid-001"},
+            {"opted_out": False},
+            {"subscription_status": "active", "trial_ends_at": None},
+        ]
+    )
 
-    with patch(
-        "src.api.webhooks.whatsapp.resolve_lid_phone",
-        new=AsyncMock(return_value="never-called"),
-    ) as mock_resolve, patch(
-        "src.worker.tasks.process_whatsapp_message.delay"
+    with (
+        patch(
+            "src.api.webhooks.whatsapp.resolve_lid_phone",
+            new=AsyncMock(return_value="never-called"),
+        ) as mock_resolve,
+        patch("src.worker.tasks.process_whatsapp_message.delay"),
     ):
         resp = c.post("/webhooks/whatsapp", json=INBOUND_MESSAGE_BODY, headers=_token_headers())
 

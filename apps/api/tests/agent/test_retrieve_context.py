@@ -8,12 +8,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import src.agent.nodes  # noqa: F401 — loads node modules into sys.modules
+
 _rc_mod = sys.modules["src.agent.nodes.retrieve_context"]
 
 from src.agent.nodes.retrieve_context import retrieve_context
 from src.agent.state import AgentState, FaqMatch
 from src.core.config import get_settings
-
 
 # ---------------------------------------------------------------------------
 # Stub-path tests (no pool / no key)
@@ -77,8 +77,12 @@ async def test_retrieve_context_maps_faq_rows_to_faq_match(
 ) -> None:
     class FakeRow:
         def __getitem__(self, k):
-            return {"id": "faq-1", "question": "Qual o horário?",
-                    "answer": "Das 9h às 18h.", "score": 0.91}[k]
+            return {
+                "id": "faq-1",
+                "question": "Qual o horário?",
+                "answer": "Das 9h às 18h.",
+                "score": 0.91,
+            }[k]
 
     pool = _make_fake_pool(faq_rows=[FakeRow()], history_rows=[])
     settings = get_settings()
@@ -107,6 +111,7 @@ async def test_retrieve_context_history_reversed_to_chronological(
     class FakeRow:
         def __init__(self, role, content):
             self._d = {"role": role, "content": content}
+
         def __getitem__(self, k):
             return self._d[k]
 

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from anthropic import AsyncAnthropic
@@ -32,9 +32,7 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 _GREETING_REPLY = "Olá! Como posso ajudar você hoje?"
-_FALLBACK_REPLY = (
-    "Obrigado pela mensagem! Vou repassar para um atendente humano em instantes."
-)
+_FALLBACK_REPLY = "Obrigado pela mensagem! Vou repassar para um atendente humano em instantes."
 _OPT_OUT_REPLY = (
     "Tudo bem! Removemos voce da nossa lista de mensagens. "
     "Se quiser retomar o contato, e so nos enviar uma mensagem."
@@ -86,8 +84,13 @@ _SLOT_SYSTEM = (
 )
 
 _WEEKDAYS_PT = [
-    "segunda-feira", "terca-feira", "quarta-feira",
-    "quinta-feira", "sexta-feira", "sabado", "domingo",
+    "segunda-feira",
+    "terca-feira",
+    "quarta-feira",
+    "quinta-feira",
+    "sexta-feira",
+    "sabado",
+    "domingo",
 ]
 
 
@@ -156,8 +159,7 @@ def _slots_to_draft(slots: dict[str, Any], contact_phone: str) -> AppointmentDra
         starts = datetime.fromisoformat(f"{date_str}T{time_str}:00")
         # Assume Sao Paulo if naive (MVP simplification)
         if starts.tzinfo is None:
-            from datetime import timezone as _tz  # noqa: PLC0415
-            starts = starts.replace(tzinfo=_tz.utc)
+            starts = starts.replace(tzinfo=UTC)
         duration = int(slots.get("duration_minutes") or 30)
         ends = starts + timedelta(minutes=duration)
         service = slots.get("service") or "Atendimento"
@@ -167,7 +169,7 @@ def _slots_to_draft(slots: dict[str, Any], contact_phone: str) -> AppointmentDra
             ends_at=ends.isoformat(),
             notes=f"Agendado via WhatsApp. Servico: {service}",
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 
@@ -178,7 +180,7 @@ def _slots_to_draft(slots: dict[str, Any], contact_phone: str) -> AppointmentDra
 
 async def generate_response(
     state: AgentState,
-    config: RunnableConfig | None = None,  # noqa: ARG001
+    config: RunnableConfig | None = None,
 ) -> dict[str, object]:
     """Produce the assistant reply via Claude Haiku.
 
@@ -210,7 +212,11 @@ async def generate_response(
             text = matches[0]["answer"]
         else:
             text = _FALLBACK_REPLY
-        logger.debug("generate_response.offline_fallback", tenant_id=state.get("tenant_id"), intent=str(intent))
+        logger.debug(
+            "generate_response.offline_fallback",
+            tenant_id=state.get("tenant_id"),
+            intent=str(intent),
+        )
         return {"response": text, "token_usage": {"input": 0, "output": 0, "cached": 0}}
 
     # ------------------------------------------------------------------
@@ -225,7 +231,7 @@ async def generate_response(
     appointment_draft: AppointmentDraft | None = state.get("appointment")  # type: ignore[assignment]
 
     if state.get("intent") == Intent.SCHEDULING and appointment_draft is None:
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         slot_system = _SLOT_SYSTEM.format(
             today=now.strftime("%Y-%m-%d"),
             weekday=_WEEKDAYS_PT[now.weekday()],
@@ -246,16 +252,27 @@ async def generate_response(
             total_usage["cached"] += getattr(u, "cache_read_input_tokens", 0)
 
             slots = _parse_slot_json(slot_raw)
-            logger.info("generate_response.slots_extracted", tenant_id=state.get("tenant_id"), slots=slots)
+            logger.info(
+                "generate_response.slots_extracted", tenant_id=state.get("tenant_id"), slots=slots
+            )
 
             if slots.get("slots_complete"):
                 appointment_draft = _slots_to_draft(slots, state.get("contact_phone", ""))
                 if appointment_draft:
                     # All slots filled — confirm and let check_confidence route to schedule
                     try:
-                        from datetime import datetime as _dt  # noqa: PLC0415
+                        from datetime import datetime as _dt
+
                         dt = _dt.fromisoformat(appointment_draft["starts_at"])
-                        weekdays = ["Segunda", "Terca", "Quarta", "Quinta", "Sexta", "Sabado", "Domingo"]
+                        weekdays = [
+                            "Segunda",
+                            "Terca",
+                            "Quarta",
+                            "Quinta",
+                            "Sexta",
+                            "Sabado",
+                            "Domingo",
+                        ]
                         friendly = dt.strftime(weekdays[dt.weekday()] + ", %d/%m as %H:%M")
                     except Exception:
                         friendly = appointment_draft.get("starts_at", "")
@@ -271,10 +288,13 @@ async def generate_response(
                     }
             else:
                 # Slots incomplete — return follow-up question directly
-                follow_up = slots.get("follow_up") or "Para agendar, pode me informar a data e o horario de sua preferencia?"
+                follow_up = (
+                    slots.get("follow_up")
+                    or "Para agendar, pode me informar a data e o horario de sua preferencia?"
+                )
                 return {"response": follow_up, "token_usage": total_usage}
 
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.error("generate_response.slot_extraction_failed", error=str(exc))
             # Fall through to general response
 

@@ -6,7 +6,7 @@ Offline/test (no pool): logs reason, returns standby message, no side effects.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -19,8 +19,7 @@ from ..state import AgentState
 logger = get_logger(__name__)
 
 _STANDBY_MESSAGE = (
-    "Vou chamar um atendente humano para te ajudar com isso. "
-    "Em instantes alguem retorna por aqui!"
+    "Vou chamar um atendente humano para te ajudar com isso. Em instantes alguem retorna por aqui!"
 )
 
 
@@ -53,7 +52,9 @@ async def _get_owner_info(pool: Any, tenant_id: str) -> dict[str, str]:
     }
 
 
-async def _notify_owner(instance_name: str, owner_phone: str, contact_phone: str, reason: str) -> None:
+async def _notify_owner(
+    instance_name: str, owner_phone: str, contact_phone: str, reason: str
+) -> None:
     cfg = get_settings()
     if not cfg.evolution_api_key or not instance_name or not owner_phone:
         return
@@ -67,10 +68,12 @@ async def _notify_owner(instance_name: str, owner_phone: str, contact_phone: str
     headers = {"apikey": cfg.evolution_api_key, "Content-Type": "application/json"}
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.post(url, json={"number": owner_phone, "text": text}, headers=headers)
+            resp = await client.post(
+                url, json={"number": owner_phone, "text": text}, headers=headers
+            )
             resp.raise_for_status()
         logger.info("handoff_human.owner_notified", instance=instance_name, owner=owner_phone)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.error("handoff_human.notify_failed", error=str(exc))
 
 
@@ -93,7 +96,7 @@ async def handoff_human(
         else f"intent:{intent.value if intent else 'unknown'}"
     )
 
-    notified_at = datetime.now(tz=timezone.utc).isoformat()
+    notified_at = datetime.now(tz=UTC).isoformat()
     tenant_id = state.get("tenant_id", "")
     conversation_id = state.get("conversation_id", "")
     contact_phone = state.get("contact_phone", "")
@@ -111,7 +114,7 @@ async def handoff_human(
     if pool is not None:
         try:
             await _mark_handoff(pool, tenant_id, conversation_id)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.error("handoff_human.mark_failed", error=str(exc))
         try:
             owner_info = await _get_owner_info(pool, tenant_id)
@@ -122,7 +125,7 @@ async def handoff_human(
                     contact_phone=contact_phone,
                     reason=reason,
                 )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.error("handoff_human.owner_info_failed", error=str(exc))
 
     return {

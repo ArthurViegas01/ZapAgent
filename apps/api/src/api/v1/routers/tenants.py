@@ -20,6 +20,7 @@ router = APIRouter(prefix="/v1/tenants/{tenant_id}", tags=["tenants"])
 # Schemas
 # ---------------------------------------------------------------------------
 
+
 class TenantOut(BaseModel):
     id: str
     slug: str
@@ -38,6 +39,7 @@ class TenantPatch(BaseModel):
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
 
 @router.get("", response_model=TenantOut)
 async def get_tenant(
@@ -81,7 +83,8 @@ async def patch_tenant(
         if body.settings is not None:
             # Merge with existing settings using jsonb ||
             updates.append(f"settings = settings || ${idx}::jsonb")
-            import json  # noqa: PLC0415
+            import json
+
             values.append(json.dumps(body.settings))
             idx += 1
 
@@ -116,6 +119,7 @@ async def patch_tenant(
 # Reuses ``core.billing_gate.check_subscription`` so the UI can never
 # disagree with the runtime gate that protects the webhook handler.
 # ---------------------------------------------------------------------------
+
 
 class BillingStatusOut(BaseModel):
     status: str

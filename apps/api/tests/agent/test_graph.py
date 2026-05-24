@@ -35,9 +35,7 @@ async def _run(graph, state: AgentState) -> dict:
 # ---------------------------------------------------------------------------
 
 
-async def test_graph_routes_handoff_for_unknown_intent(
-    graph, base_state: AgentState
-) -> None:
+async def test_graph_routes_handoff_for_unknown_intent(graph, base_state: AgentState) -> None:
     """Garbage input -> no keyword match -> low confidence -> handoff branch."""
     base_state["user_message"] = "asdfghjkl"
     final = await _run(graph, base_state)
@@ -54,9 +52,7 @@ async def test_graph_responds_to_greeting(graph, base_state: AgentState) -> None
     assert "response" in final
 
 
-async def test_graph_scheduling_intent_classified_correctly(
-    graph, base_state: AgentState
-) -> None:
+async def test_graph_scheduling_intent_classified_correctly(graph, base_state: AgentState) -> None:
     """Scheduling intent is classified; in offline mode routes to handoff (no DB)."""
     base_state["user_message"] = "Quero agendar uma consulta amanha"
     final = await _run(graph, base_state)
@@ -73,9 +69,7 @@ async def test_graph_records_token_usage(graph, base_state: AgentState) -> None:
     assert all(isinstance(v, int) for v in final["token_usage"].values())
 
 
-async def test_graph_invokes_all_expected_pre_routing_nodes(
-    graph, base_state: AgentState
-) -> None:
+async def test_graph_invokes_all_expected_pre_routing_nodes(graph, base_state: AgentState) -> None:
     """Every pre-routing node must run regardless of which branch is taken."""
     final = await _run(graph, base_state)
     assert "intent" in final
@@ -94,9 +88,7 @@ async def test_graph_opt_out_routes_to_respond(graph, base_state: AgentState) ->
     assert final["next_action"] == "respond"
 
 
-async def test_graph_handoff_sets_reason_and_timestamp(
-    graph, base_state: AgentState
-) -> None:
+async def test_graph_handoff_sets_reason_and_timestamp(graph, base_state: AgentState) -> None:
     """handoff_human node must populate handoff_reason and handoff_notified_at."""
     base_state["user_message"] = "asdfghjkl"
     final = await _run(graph, base_state)

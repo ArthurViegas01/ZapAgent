@@ -20,7 +20,7 @@ Coverage matrix:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -52,9 +52,7 @@ TID = "00000000-0000-0000-0000-000000000abc"
 
 @pytest.mark.asyncio
 async def test_active_subscription_is_allowed():
-    pool = _mock_pool_returning(
-        {"subscription_status": "active", "trial_ends_at": None}
-    )
+    pool = _mock_pool_returning({"subscription_status": "active", "trial_ends_at": None})
     result = await check_subscription(pool, TID)
     assert result.allowed is True
     assert result.status == "active"
@@ -64,9 +62,7 @@ async def test_active_subscription_is_allowed():
 
 @pytest.mark.asyncio
 async def test_past_due_is_allowed_grace_period():
-    pool = _mock_pool_returning(
-        {"subscription_status": "past_due", "trial_ends_at": None}
-    )
+    pool = _mock_pool_returning({"subscription_status": "past_due", "trial_ends_at": None})
     result = await check_subscription(pool, TID)
     assert result.allowed is True
     assert result.reason == "past_due_grace"
@@ -74,9 +70,7 @@ async def test_past_due_is_allowed_grace_period():
 
 @pytest.mark.asyncio
 async def test_suspended_is_blocked_with_pause_message():
-    pool = _mock_pool_returning(
-        {"subscription_status": "suspended", "trial_ends_at": None}
-    )
+    pool = _mock_pool_returning({"subscription_status": "suspended", "trial_ends_at": None})
     result = await check_subscription(pool, TID)
     assert result.allowed is False
     assert result.status == "suspended"
@@ -86,10 +80,8 @@ async def test_suspended_is_blocked_with_pause_message():
 
 @pytest.mark.asyncio
 async def test_trialing_with_future_end_is_allowed_with_days_left():
-    future = datetime.now(tz=timezone.utc) + timedelta(days=7, hours=2)
-    pool = _mock_pool_returning(
-        {"subscription_status": "trialing", "trial_ends_at": future}
-    )
+    future = datetime.now(tz=UTC) + timedelta(days=7, hours=2)
+    pool = _mock_pool_returning({"subscription_status": "trialing", "trial_ends_at": future})
     result = await check_subscription(pool, TID)
     assert result.allowed is True
     assert result.status == "trialing"
@@ -98,10 +90,8 @@ async def test_trialing_with_future_end_is_allowed_with_days_left():
 
 @pytest.mark.asyncio
 async def test_trialing_with_past_end_is_blocked():
-    past = datetime.now(tz=timezone.utc) - timedelta(minutes=1)
-    pool = _mock_pool_returning(
-        {"subscription_status": "trialing", "trial_ends_at": past}
-    )
+    past = datetime.now(tz=UTC) - timedelta(minutes=1)
+    pool = _mock_pool_returning({"subscription_status": "trialing", "trial_ends_at": past})
     result = await check_subscription(pool, TID)
     assert result.allowed is False
     assert result.status == "trialing"
@@ -112,9 +102,7 @@ async def test_trialing_with_past_end_is_blocked():
 
 @pytest.mark.asyncio
 async def test_trialing_with_null_end_is_allowed_but_flagged():
-    pool = _mock_pool_returning(
-        {"subscription_status": "trialing", "trial_ends_at": None}
-    )
+    pool = _mock_pool_returning({"subscription_status": "trialing", "trial_ends_at": None})
     result = await check_subscription(pool, TID)
     assert result.allowed is True
     assert result.reason == "trialing_no_end"

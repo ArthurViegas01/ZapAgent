@@ -14,7 +14,7 @@ Plus Google Calendar OAuth (start/callback/delete).
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -33,6 +33,7 @@ _settings = get_settings()
 # ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
+
 
 class IntegrationOut(BaseModel):
     id: str
@@ -53,6 +54,7 @@ class WhatsappConnectOut(BaseModel):
 # ---------------------------------------------------------------------------
 # Routes -- WhatsApp
 # ---------------------------------------------------------------------------
+
 
 @router.get("", response_model=list[IntegrationOut])
 async def list_integrations(
@@ -259,7 +261,7 @@ async def google_calendar_oauth_start(
     ctx: TenantContext = Depends(require_owner_or_admin),
 ) -> dict:
     """Return the Google OAuth consent URL."""
-    import urllib.parse  # noqa: PLC0415
+    import urllib.parse
 
     cfg = get_settings()
     if not cfg.google_oauth_client_id:
@@ -292,8 +294,7 @@ async def google_calendar_oauth_callback(
     ctx: TenantContext = Depends(require_owner_or_admin),
 ) -> dict:
     """Exchange OAuth code for tokens and persist the integration."""
-    import json as _json  # noqa: PLC0415
-    from datetime import timezone as _tz  # noqa: PLC0415
+    import json as _json
 
     cfg = get_settings()
 
@@ -317,7 +318,7 @@ async def google_calendar_oauth_callback(
             detail="Google token exchange failed.",
         ) from exc
 
-    now_ts = datetime.now(tz=_tz.utc).timestamp()
+    now_ts = datetime.now(tz=UTC).timestamp()
     secrets_data = {
         "access_token": token_data["access_token"],
         "refresh_token": token_data.get("refresh_token", ""),
@@ -334,7 +335,7 @@ async def google_calendar_oauth_callback(
             )
             if cal_resp.status_code == 200:
                 calendar_id = cal_resp.json().get("id", "primary")
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     async with ctx.conn() as conn:

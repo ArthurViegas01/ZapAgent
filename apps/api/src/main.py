@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,7 +32,7 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 
         # Bind to structlog's request-scoped context if available.
         try:
-            import structlog  # noqa: PLC0415
+            import structlog
 
             structlog.contextvars.bind_contextvars(request_id=rid)
             try:
@@ -64,6 +64,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if settings.database_url_sync:
         try:
             from .db.pool import create_pool
+
             app.state.db_pool = await create_pool()
         except Exception as exc:
             logger.warning("api.db_pool.failed", error=str(exc))
@@ -96,7 +97,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
-    from .core.rate_limit import RateLimitMiddleware  # noqa: PLC0415
+    from .core.rate_limit import RateLimitMiddleware
+
     app.add_middleware(RateLimitMiddleware, redis_url=str(settings.redis_url))
     app.add_middleware(RequestIdMiddleware)
 
@@ -108,7 +110,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/ready", tags=["meta"])
     async def ready(request: Request) -> dict[str, object]:
         """Readiness probe -- DB pool reachable, provider resolvable."""
-        from .integrations.whatsapp import get_whatsapp_provider  # noqa: PLC0415
+        from .integrations.whatsapp import get_whatsapp_provider
 
         db_ok = False
         pool = getattr(request.app.state, "db_pool", None)
@@ -117,13 +119,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 async with pool.acquire() as conn:
                     await conn.fetchval("SELECT 1")
                 db_ok = True
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("ready.db_check_failed", error=str(exc))
 
         provider_name = ""
         try:
             provider_name = get_whatsapp_provider().name
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("ready.provider_failed", error=str(exc))
 
         ok = db_ok and bool(provider_name)
@@ -134,13 +136,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     from .api.webhooks.whatsapp import router as whatsapp_router
+
     app.include_router(whatsapp_router, prefix="/webhooks")
 
     # REST API v1 -- tenant-scoped resources
-    from .api.v1.routers.tenants import router as tenants_router
-    from .api.v1.routers.faq import router as faq_router
     from .api.v1.routers.conversations import router as conversations_router
+    from .api.v1.routers.faq import router as faq_router
     from .api.v1.routers.integrations import router as integrations_router
+    from .api.v1.routers.tenants import router as tenants_router
+
     app.include_router(tenants_router, prefix="/api")
     app.include_router(faq_router, prefix="/api")
     app.include_router(conversations_router, prefix="/api")

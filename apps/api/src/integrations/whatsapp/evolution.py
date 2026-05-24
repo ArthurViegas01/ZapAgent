@@ -115,7 +115,7 @@ class EvolutionProvider(WhatsAppProvider):
                     state = "connected"
                 elif evo_state in ("close", "refused"):
                     state = "revoked"
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.debug("evolution.state_check_failed", instance=instance_name, error=str(exc))
 
         return SessionInfo(instance_name=instance_name, status=state, qrcode_data_url="")  # type: ignore[arg-type]
@@ -128,7 +128,7 @@ class EvolutionProvider(WhatsAppProvider):
                     headers=self._admin_headers(),
                 )
             logger.info("evolution.instance_deleted", instance=instance_name)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("evolution.delete_failed", instance=instance_name, error=str(exc))
 
     # -- outbound ----------------------------------------------------------

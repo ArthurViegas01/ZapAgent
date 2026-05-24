@@ -11,8 +11,9 @@ Usage:
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator, NamedTuple
+from typing import NamedTuple
 
 import asyncpg
 from fastapi import Depends, HTTPException, Request, Security, status
@@ -29,6 +30,7 @@ _bearer = HTTPBearer(auto_error=False)
 # JWT verification
 # ---------------------------------------------------------------------------
 
+
 async def _verify_token_via_supabase_api(token: str) -> dict | None:
     """Verify a JWT by calling Supabase's /auth/v1/user endpoint.
 
@@ -38,7 +40,7 @@ async def _verify_token_via_supabase_api(token: str) -> dict | None:
 
     Returns a claims-like dict on success, None on failure.
     """
-    import httpx  # noqa: PLC0415
+    import httpx
 
     settings = get_settings()
     if not settings.supabase_url or not settings.supabase_service_role_key:
@@ -63,8 +65,7 @@ async def _verify_token_via_supabase_api(token: str) -> dict | None:
                 "app_metadata": user.get("app_metadata", {}),
                 "user_metadata": user.get("user_metadata", {}),
             }
-        logger.warning("jwt.supabase_api_rejected", status=resp.status_code,
-                       body=resp.text[:200])
+        logger.warning("jwt.supabase_api_rejected", status=resp.status_code, body=resp.text[:200])
     except Exception as exc:
         logger.warning("jwt.supabase_api_error", error=str(exc))
 
@@ -78,7 +79,8 @@ def _decode_jwt_unverified(token: str) -> dict | None:
     last-resort after Supabase API verification already confirmed the token.
     """
     try:
-        from jose import jwt  # noqa: PLC0415
+        from jose import jwt
+
         return jwt.get_unverified_claims(token)
     except Exception:
         return None
@@ -87,6 +89,7 @@ def _decode_jwt_unverified(token: str) -> dict | None:
 # ---------------------------------------------------------------------------
 # Tenant context
 # ---------------------------------------------------------------------------
+
 
 class TenantContext(NamedTuple):
     tenant_id: str
@@ -97,17 +100,15 @@ class TenantContext(NamedTuple):
     @asynccontextmanager
     async def conn(self) -> AsyncIterator[asyncpg.Connection]:
         """Acquire a connection with RLS tenant_id pre-set."""
-        async with self.pool.acquire() as connection:
-            async with connection.transaction():
-                await connection.execute(
-                    f"SET LOCAL app.tenant_id = '{self.tenant_id}'"
-                )
-                yield connection
+        async with self.pool.acquire() as connection, connection.transaction():
+            await connection.execute(f"SET LOCAL app.tenant_id = '{self.tenant_id}'")
+            yield connection
 
 
 # ---------------------------------------------------------------------------
 # Dependency
 # ---------------------------------------------------------------------------
+
 
 async def require_tenant(
     request: Request,
@@ -165,9 +166,8 @@ async def require_tenant(
 
     # The tenant_id comes from the JWT custom claim set by Supabase RLS trigger,
     # or falls back to the URL path parameter {tenant_id}.
-    tenant_id: str = (
-        claims.get("app_metadata", {}).get("tenant_id")
-        or request.path_params.get("tenant_id", "")
+    tenant_id: str = claims.get("app_metadata", {}).get("tenant_id") or request.path_params.get(
+        "tenant_id", ""
     )
     if not tenant_id:
         logger.warning(
@@ -193,20 +193,19 @@ async def require_tenant(
     # Must set app.tenant_id GUC inside a transaction so the RLS policy
     # (tenant_id = current_tenant_id()) can see the row.
     try:
-        async with pool.acquire() as conn:
-            async with conn.transaction():
-                await conn.execute(f"SET LOCAL app.tenant_id = '{tenant_id}'")
-                row = await conn.fetchrow(
-                    """
+        async with pool.acquire() as conn, conn.transaction():
+            await conn.execute(f"SET LOCAL app.tenant_id = '{tenant_id}'")
+            row = await conn.fetchrow(
+                """
                     SELECT u.role
                       FROM users u
                      WHERE u.auth_user_id = $1::uuid
                        AND u.tenant_id    = $2::uuid
                      LIMIT 1
                     """,
-                    user_id,
-                    tenant_id,
-                )
+                user_id,
+                tenant_id,
+            )
     except Exception as exc:
         logger.error("require_tenant.db_error", error=str(exc))
         raise HTTPException(

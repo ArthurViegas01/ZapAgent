@@ -36,6 +36,7 @@ settings = get_settings()
 # DB helpers
 # ---------------------------------------------------------------------------
 
+
 async def _record_webhook_event(
     conn: asyncpg.Connection,
     source: str,
@@ -137,6 +138,7 @@ def _classify_messages_skip_reason(body: dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 # Route
 # ---------------------------------------------------------------------------
+
 
 @router.post("/whatsapp")
 @router.post("/whatsapp/{event_path:path}")
@@ -333,8 +335,8 @@ async def receive_whatsapp_event(request: Request, event_path: str = "") -> JSON
     # pt-BR message and skip the Celery dispatch. The agent never sees
     # the turn, so we don't pay LLM tokens for a non-paying customer.
     # See ``core/billing_gate.py`` for the decision matrix.
-    from src.core.billing_gate import check_subscription  # noqa: PLC0415
-    from src.integrations.whatsapp import get_whatsapp_provider as _gp  # noqa: PLC0415
+    from src.core.billing_gate import check_subscription
+    from src.integrations.whatsapp import get_whatsapp_provider as _gp
 
     gate = await check_subscription(pool, tenant_id)
     if not gate.allowed:
@@ -353,15 +355,13 @@ async def receive_whatsapp_event(request: Request, event_path: str = "") -> JSON
                 phone=inbound.contact_phone,
                 text=gate.reply_to_customer,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning(
                 "webhook.billing_block_reply_failed",
                 instance=instance_name,
                 error=str(exc),
             )
-        return JSONResponse(
-            {"ok": True, "skipped": "billing", "billing_status": gate.status}
-        )
+        return JSONResponse({"ok": True, "skipped": "billing", "billing_status": gate.status})
 
     process_whatsapp_message.delay(
         tenant_id=tenant_id,

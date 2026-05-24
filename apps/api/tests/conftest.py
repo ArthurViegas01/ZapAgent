@@ -24,7 +24,7 @@ def _override_settings() -> None:
     payload shapes; opt into the stub by overriding settings.whatsapp_provider
     in the test itself.
     """
-    from src.integrations.whatsapp import reset_provider  # noqa: PLC0415
+    from src.integrations.whatsapp import reset_provider
 
     settings = get_settings()
     settings.environment = "test"

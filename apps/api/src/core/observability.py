@@ -39,12 +39,12 @@ def _build_integrations() -> list[Any]:
     """Lazy-import sentry integrations so importing this module is free
     when sentry-sdk is absent (it shouldn't be, but pyproject extras can
     drift in monorepos)."""
-    from sentry_sdk.integrations.asyncpg import AsyncPGIntegration  # noqa: PLC0415
-    from sentry_sdk.integrations.celery import CeleryIntegration  # noqa: PLC0415
-    from sentry_sdk.integrations.fastapi import FastApiIntegration  # noqa: PLC0415
-    from sentry_sdk.integrations.httpx import HttpxIntegration  # noqa: PLC0415
-    from sentry_sdk.integrations.logging import LoggingIntegration  # noqa: PLC0415
-    from sentry_sdk.integrations.starlette import StarletteIntegration  # noqa: PLC0415
+    from sentry_sdk.integrations.asyncpg import AsyncPGIntegration
+    from sentry_sdk.integrations.celery import CeleryIntegration
+    from sentry_sdk.integrations.fastapi import FastApiIntegration
+    from sentry_sdk.integrations.httpx import HttpxIntegration
+    from sentry_sdk.integrations.logging import LoggingIntegration
+    from sentry_sdk.integrations.starlette import StarletteIntegration
 
     return [
         FastApiIntegration(transaction_style="endpoint"),
@@ -77,7 +77,7 @@ def init_observability(component: str) -> None:
         return
 
     try:
-        import sentry_sdk  # noqa: PLC0415
+        import sentry_sdk
     except ImportError:
         logger.warning("observability.sentry_skipped", reason="sentry_sdk_not_installed")
         _INITIALIZED = True
