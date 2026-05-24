@@ -6,6 +6,81 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed (end-to-end WhatsApp pairing test, 2026-05-24 PM)
+Bugs caught during the first real WhatsApp pair-and-message test against
+Supabase production (project `oodfxbrbawcnromvhjga`). Inbound flow
+(webhook → Celery → LangGraph → response generated → persisted) now
+works end-to-end; outbound delivery for `@lid` contacts is a separate
+production blocker tracked under "Known issues" below.
+
+- `apps/api/src/db/pool.py` — replaced the process-singleton
+  `_worker_pool` global with `worker_pool_scope()`, an async context
+  manager that opens a fresh `asyncpg` pool per Celery task and closes
+  it on exit. Celery prefork workers run each task inside its own
+  `asyncio.run()` loop; the previous pool was bound to whatever loop
+  ran the first task in the worker process, and every subsequent task
+  crashed with `RuntimeError: ... Event loop is closed` when calling
+  `pool.acquire()`. Per-task scoping costs ~50 ms TCP connect per task
+  (negligible vs the multi-second LLM call) and eliminates the hazard.
+- `apps/api/src/agent/checkpointer.py` — same fix for the psycopg pool
+  feeding `AsyncPostgresSaver`. Replaced the module-level `_pool`,
+  `_saver`, and `_init_lock = asyncio.Lock()` globals with
+  `async_postgres_saver_scope()`, a context manager that opens the
+  pool, runs `setup()` once per DSN per process, yields the saver, and
+  closes the pool. The previous code crashed mid-graph at
+  `aput_writes` with `<asyncio.locks.Lock object> is bound to a
+  different event loop` for the same reason — the lock was created at
+  module import time (no loop bound) but `.acquire()`'d in task A's
+  loop, then re-used after task A's loop closed.
+- `apps/api/src/worker/tasks.py` — `_main` and `_run_agent` now wrap
+  their work in the new context managers (`worker_pool_scope` +
+  `async_postgres_saver_scope`). `_run_agent` keeps the
+  fallback-to-`MemorySaver` branch via try/except around the
+  scope. `purge_old_messages` migrated to the same pattern.
+- `apps/api/src/agent/context.py` — **new module** exposing
+  `set_db_pool` / `get_db_pool` on a `contextvars.ContextVar`. The
+  worker calls `set_db_pool(pool)` before `graph.ainvoke`; the
+  `retrieve_context` node reads it back. Why a contextvar instead of
+  the LangGraph `config["configurable"]` dict: LangGraph (current
+  pinned version) drops our `db_pool` key from `configurable` before
+  the node is invoked — observed empirically with
+  `configurable_keys=[]` in the no-pool log path. The framework also
+  emits a warning that the `RunnableConfig | None` annotation isn't
+  recognized; contextvars sidestep both issues entirely. The node
+  still falls back to the LangGraph config for forward-compat.
+- `apps/api/src/agent/nodes/retrieve_context.py` +
+  `apps/api/src/api/v1/routers/faq.py` — the Voyage embed call now
+  passes `output_dimension=1024` explicitly. `voyage-3-lite` defaults
+  to 512 dims and crashes on insert into `faq_items.embedding`
+  declared as `VECTOR(1024)`. The default model in `.env.example`
+  also moved to `voyage-3` (which accepts 1024 natively); `voyage-3-lite`
+  refuses anything but 512 dims, so the schema dim was the source of
+  truth.
+- `.gitignore` — added `.env.bak*` to cover the per-session backups
+  generated when switching between local-postgres and Supabase pooler
+  configs.
+
+#### Known issues surfaced by this test (tracked in ROADMAP)
+
+- **WhatsApp `@lid` contacts cannot receive replies.** Evolution 2.2.3
+  passes the `key.remoteJid` through to the webhook unchanged
+  (`<digits>@lid`). Bare digits parsed off that JID are not a valid
+  phone number — `sendText` returns `400 Bad Request {"exists":false}`.
+  The real `@s.whatsapp.net` is exposed by Baileys as `sender_pn` in
+  its raw socket log but Evolution drops the field before emitting the
+  webhook (grep returns zero matches in `dist/main.js`). Modern
+  Brazilian WhatsApp accounts default to `@lid` privacy, so this is
+  a production blocker for the SaaS gate; a sidecar that tails
+  Evolution stdout and caches `(message_id → sender_pn)` is the
+  current path forward.
+- **`check_confidence` derives confidence from FAQ match score even for
+  intents where FAQ retrieval isn't the signal.** A `GREETING` like
+  "Oi" produces no semantic match against FAQ rows, so confidence is
+  ~0.18 and `next_action=handoff` — the user receives the "vou chamar
+  um atendente humano" reply for a casual greeting. Same for
+  `SCHEDULING` when the offline-fallback path returns a clarifying
+  question. The fix is per-intent confidence rules; tracked.
+
 ### Fixed (local-test pass, 2026-05-24)
 Bugs caught when running the full TESTING.md playbook end-to-end. All
 test suites passing after these: 83/83 unit, 3/3 integration, 4/4 demo
