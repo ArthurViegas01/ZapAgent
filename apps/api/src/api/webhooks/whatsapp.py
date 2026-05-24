@@ -13,6 +13,7 @@ lives below.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from typing import Any
 
@@ -23,6 +24,7 @@ from fastapi.responses import JSONResponse
 from src.core.config import get_settings
 from src.core.logging import get_logger
 from src.integrations.whatsapp import get_whatsapp_provider
+from src.integrations.whatsapp.lid import resolve_lid_phone
 from src.worker.tasks import process_whatsapp_message
 
 logger = get_logger(__name__)
@@ -248,6 +250,31 @@ async def receive_whatsapp_event(request: Request, event_path: str = "") -> JSON
     if inbound is None:
         skip_reason = _classify_messages_skip_reason(body)
         return JSONResponse({"ok": True, "skipped": skip_reason})
+
+    # @lid resolution: privacy-mode WA contacts arrive with a masked JID like
+    # ``<digits>:<device>@lid`` and the digits aren't a valid phone — sendText
+    # would 400 on the way back out. The sidecar (src.sidecars.lid_resolver)
+    # caches the real phone keyed by provider_message_id; look it up here so
+    # everything downstream (DB conversation row, Celery task) sees the right
+    # number. Missing the cache is non-fatal: we keep the masked phone and
+    # log so we can spot the gap.
+    raw_jid = ((body.get("data") or {}).get("key") or {}).get("remoteJid", "")
+    if isinstance(raw_jid, str) and raw_jid.endswith("@lid"):
+        resolved = await resolve_lid_phone(inbound.provider_message_id)
+        if resolved:
+            logger.info(
+                "webhook.lid_resolved",
+                provider_message_id=inbound.provider_message_id,
+                masked_phone=inbound.contact_phone,
+                resolved_phone=resolved,
+            )
+            inbound = dataclasses.replace(inbound, contact_phone=resolved)
+        else:
+            logger.warning(
+                "webhook.lid_unresolved",
+                provider_message_id=inbound.provider_message_id,
+                masked_phone=inbound.contact_phone,
+            )
 
     logger.info(
         "webhook.messages_upsert",
