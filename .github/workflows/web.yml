@@ -81,13 +81,16 @@ jobs:
 
       - name: Build
         env:
-          NEXT_PUBLIC_SUPABASE_URL:     ${{ secrets.SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_URL:      ${{ secrets.SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-          NEXT_PUBLIC_API_URL:          ${{ secrets.API_URL }}
-          SUPABASE_SERVICE_ROLE_KEY:    ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          GOOGLE_OAUTH_CLIENT_ID:       ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
-          GOOGLE_OAUTH_CLIENT_SECRET:   ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
-          GOOGLE_OAUTH_REDIRECT_URI:    ${{ secrets.GOOGLE_OAUTH_REDIRECT_URI }}
+          NEXT_PUBLIC_API_URL:           ${{ secrets.API_URL }}
+          SUPABASE_SERVICE_ROLE_KEY:     ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GOOGLE_OAUTH_CLIENT_ID:        ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET:    ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_OAUTH_REDIRECT_URI:     ${{ secrets.GOOGLE_OAUTH_REDIRECT_URI }}
+          # Optional — picked up by @sentry/nextjs when the follow-up task
+          # lands (NEXT_PUBLIC prefix exposes it to the browser bundle).
+          NEXT_PUBLIC_SENTRY_DSN:        ${{ secrets.SENTRY_DSN }}
         run: pnpm run build
 
       - name: Deploy to Netlify

@@ -69,6 +69,39 @@ variable "evolution_api_key" {
   sensitive   = true
 }
 
+variable "evolution_webhook_token" {
+  description = <<-EOT
+    Per-instance token Evolution sends in the `token` header on every
+    webhook event (least-privilege; we never give Evolution our admin
+    apikey for webhook routing). The API verifies via
+    `EvolutionProvider.verify_webhook_auth` against `EVOLUTION_WEBHOOK_TOKEN`.
+    Pick a strong random string distinct from `evolution_api_key`.
+  EOT
+  type        = string
+  sensitive   = true
+}
+
+# ---------------------------------------------------------------------------
+# Observability
+# ---------------------------------------------------------------------------
+
+variable "sentry_dsn" {
+  description = <<-EOT
+    Sentry project DSN for the api + worker services. Leave empty to
+    disable Sentry; the wiring in `core/observability.py` no-ops when
+    unset. Form: https://<key>@<org>.ingest.sentry.io/<project>
+  EOT
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "sentry_traces_sample_rate" {
+  description = "Fraction of requests sampled for performance tracing (0.0 disables)."
+  type        = number
+  default     = 0.1
+}
+
 # ---------------------------------------------------------------------------
 # Google OAuth
 # ---------------------------------------------------------------------------

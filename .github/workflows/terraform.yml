@@ -31,9 +31,11 @@ jobs:
       TF_VAR_anthropic_api_key:       ${{ secrets.ANTHROPIC_API_KEY }}
       TF_VAR_voyage_api_key:          ${{ secrets.VOYAGE_API_KEY }}
       TF_VAR_evolution_api_key:       ${{ secrets.EVOLUTION_API_KEY }}
+      TF_VAR_evolution_webhook_token: ${{ secrets.EVOLUTION_WEBHOOK_TOKEN }}
       TF_VAR_google_oauth_client_id:  ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
       TF_VAR_google_oauth_client_secret: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
       TF_VAR_google_oauth_redirect_uri: ${{ secrets.GOOGLE_OAUTH_REDIRECT_URI }}
+      TF_VAR_sentry_dsn:              ${{ secrets.SENTRY_DSN }}
 
     steps:
       - uses: actions/checkout@v4

@@ -1,9 +1,9 @@
 ###############################################################################
-# ZapAgent — Railway Infrastructure
+# Encaixe — Railway Infrastructure
 #
 # Provisions the full backend stack on Railway:
-#   • zapagent-api      FastAPI service (Dockerfile prod target)
-#   • zapagent-worker   Celery worker (same image, different CMD)
+#   • encaixe-api      FastAPI service (Dockerfile prod target)
+#   • encaixe-worker   Celery worker (same image, different CMD)
 #   • zapagent-evo      Evolution API (WhatsApp bridge)
 #   • Redis             Railway plugin (managed Redis)
 #
@@ -43,9 +43,9 @@ provider "railway" {
 # Project
 # ---------------------------------------------------------------------------
 
-resource "railway_project" "zapagent" {
-  name        = "zapagent"
-  description = "ZapAgent — WhatsApp AI assistant SaaS"
+resource "railway_project" "encaixe" {
+  name        = "encaixe"
+  description = "Encaixe — WhatsApp AI assistant SaaS"
 }
 
 # ---------------------------------------------------------------------------
@@ -54,7 +54,7 @@ resource "railway_project" "zapagent" {
 
 resource "railway_plugin" "redis" {
   project_id      = railway_project.zapagent.id
-  name            = "zapagent-redis"
+  name            = "encaixe-redis"
   plugin_type     = "redis"
 }
 
@@ -64,9 +64,25 @@ resource "railway_plugin" "redis" {
 
 resource "railway_service" "evolution" {
   project_id = railway_project.zapagent.id
-  name       = "zapagent-evolution"
+  name       = "encaixe-evolution"
 
-  source_image = "atendai/evolution-api:latest"
+  # IMPORTANT: build from `apps/evolution/Dockerfile` (NOT the official
+  # `atendai/evolution-api:latest` image). The official image pins an old
+  # @whiskeysockets/baileys whose noise-protocol keys are out of date —
+  # WebSocket connects (101) but the encrypted handshake never completes
+  # and no QR is generated. Our Dockerfile inherits from the official
+  # image and installs Baileys 6.7.9 (last CJS-compatible release that
+  # works with Evolution 2.2.x). This is the same fix already proven
+  # locally via docker-compose. See `apps/evolution/Dockerfile`.
+  source {
+    repo            = var.github_repo
+    root_directory  = "apps/evolution"
+  }
+
+  build_config {
+    builder         = "dockerfile"
+    dockerfile_path = "Dockerfile"
+  }
 
   volume {
     mount_path = "/evolution/instances"
@@ -116,7 +132,7 @@ resource "railway_variable_collection" "evolution_vars" {
 
 resource "railway_service" "api" {
   project_id = railway_project.zapagent.id
-  name       = "zapagent-api"
+  name       = "encaixe-api"
 
   source {
     repo   = var.github_repo
@@ -149,11 +165,45 @@ resource "railway_variable_collection" "api_vars" {
     SUPABASE_SERVICE_ROLE_KEY = var.supabase_service_role_key
     ANTHROPIC_API_KEY       = var.anthropic_api_key
     VOYAGE_API_KEY          = var.voyage_api_key
+
+    # ----------------------------------------------------------------
+    # WhatsApp provider — explicit. Default in settings.py is
+    # "evolution" but pinning the env var keeps surprises out of
+    # production. Switch to "stub" only for emergency triage.
+    # ----------------------------------------------------------------
+    WHATSAPP_PROVIDER       = "evolution"
     EVOLUTION_API_URL       = "https://${railway_service.evolution.default_domain}"
     EVOLUTION_API_KEY       = var.evolution_api_key
-    GOOGLE_OAUTH_CLIENT_ID  = var.google_oauth_client_id
+
+    # Token Evolution echoes back on every webhook (header `token: ...`).
+    # API verifies via `EvolutionProvider.verify_webhook_auth`. Without
+    # this, the webhook handler accepts any caller — see settings.py
+    # default of "changeme" which is intentionally invalid in prod.
+    EVOLUTION_WEBHOOK_TOKEN = var.evolution_webhook_token
+
+    # Base URL Evolution POSTs to. The default in settings.py points at
+    # `http://api:8000/...` (docker-compose internal DNS) which does NOT
+    # resolve on Railway — without overriding it, the QR generates but
+    # no inbound message ever reaches the agent.
+    EVOLUTION_WEBHOOK_BASE_URL = "https://${railway_service.api.default_domain}/webhooks/whatsapp"
+
+    # ----------------------------------------------------------------
+    # Google Calendar OAuth — redirect URI must match the Netlify URL
+    # in Google Cloud Console *exactly* (scheme + host + path).
+    # ----------------------------------------------------------------
+    GOOGLE_OAUTH_CLIENT_ID     = var.google_oauth_client_id
     GOOGLE_OAUTH_CLIENT_SECRET = var.google_oauth_client_secret
     GOOGLE_OAUTH_REDIRECT_URI  = var.google_oauth_redirect_uri
+
+    # ----------------------------------------------------------------
+    # Sentry — empty DSN = no-op in code (core/observability.py).
+    # SENTRY_RELEASE pulls the SHA Railway injects on every build so
+    # error grouping per release works out of the box. The literal
+    # ${"$"}{...} is a Terraform escape; Railway sees a plain "$VAR".
+    # ----------------------------------------------------------------
+    SENTRY_DSN                = var.sentry_dsn
+    SENTRY_TRACES_SAMPLE_RATE = tostring(var.sentry_traces_sample_rate)
+    SENTRY_RELEASE            = "$${RAILWAY_GIT_COMMIT_SHA}"
   }
 
   depends_on = [railway_plugin.redis, railway_service.evolution]
@@ -165,7 +215,7 @@ resource "railway_variable_collection" "api_vars" {
 
 resource "railway_service" "worker" {
   project_id = railway_project.zapagent.id
-  name       = "zapagent-worker"
+  name       = "encaixe-worker"
 
   source {
     repo   = var.github_repo
