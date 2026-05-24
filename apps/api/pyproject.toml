@@ -37,7 +37,6 @@ dependencies = [
     "google-auth-oauthlib>=1.2.0",
     "google-api-python-client>=2.140.0",
     "qrcode[pil]>=7.4.2",
-    "docker>=7.1.0",
 ]
 
 [project.optional-dependencies]

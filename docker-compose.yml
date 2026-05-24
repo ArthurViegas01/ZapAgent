@@ -94,6 +94,10 @@ services:
       CACHE_REDIS_URI: redis://redis:6379/3
       CACHE_REDIS_PREFIX_KEY: evolution
       CACHE_LOCAL_ENABLED: "false"
+      # -- @lid sender_pn intercept (lid_pipe.py, embedded in this image) --
+      # Same Redis DB as the API (db 0); webhook reads `lid_pn:{msg_id}` here.
+      REDIS_URL: redis://redis:6379/0
+      LID_TTL_SECONDS: "86400"
       # -- QR / logs -----------------------------------------------------
       QRCODE_LIMIT: "30"
       QRCODE_COLOR: "#007bff"
@@ -169,33 +173,6 @@ services:
       celery -A src.worker.celery_app worker
       --loglevel=INFO
       --concurrency=2
-
-  lid-resolver:
-    # Sidecar that tails Evolution stdout and caches sender_pn -> message_id
-    # in Redis. Required for inbound replies to @lid contacts (modern BR
-    # WhatsApp privacy mode). See apps/api/src/sidecars/lid_resolver.py.
-    build:
-      context: ./apps/api
-      dockerfile: Dockerfile
-      target: dev
-    image: encaixe-api:dev
-    container_name: encaixe-lid-resolver
-    restart: unless-stopped
-    depends_on:
-      redis:
-        condition: service_healthy
-      evolution:
-        condition: service_started
-    environment:
-      REDIS_URL: redis://redis:6379/0
-      EVOLUTION_CONTAINER: encaixe-evolution
-      LID_TTL_SECONDS: "86400"
-    volumes:
-      # Read-only docker socket so the sidecar can stream Evolution logs.
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./apps/api:/app
-      - api_venv:/app/.venv
-    command: python -m src.sidecars.lid_resolver
 
 volumes:
   postgres_data:

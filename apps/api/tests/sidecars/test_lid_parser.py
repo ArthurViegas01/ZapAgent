@@ -7,7 +7,7 @@ Keep them verbatim — the parser exists exactly to survive these shapes.
 
 from __future__ import annotations
 
-from src.sidecars.lid_resolver import iter_log_lines, parse_recv_line
+from src.sidecars.lid_parser import iter_log_lines, parse_recv_line
 
 # A Baileys 'recv' for a text message — the one shape we *do* want to cache.
 TEXT_RECV = (

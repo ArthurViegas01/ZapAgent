@@ -121,6 +121,19 @@ resource "railway_variable_collection" "evolution_vars" {
     WEBHOOK_EVENTS_QRCODE_UPDATED   = "true"
     WEBHOOK_EVENTS_MESSAGES_UPSERT  = "true"
     WEBHOOK_EVENTS_CONNECTION_UPDATE = "true"
+
+    # ----------------------------------------------------------------
+    # @lid sender_pn intercept (lid_pipe.py, embedded in the Evolution
+    # image — see apps/evolution/Dockerfile). Modern Brazilian WA
+    # accounts hide the real phone behind an @lid JID and Evolution
+    # drops the sender_pn webhook field; lid_pipe reads stdout and
+    # writes `lid_pn:{msg_id}` to Redis db 0. The API webhook looks
+    # the key up when it sees an @lid contact. Without these env vars
+    # the script falls into passthrough mode (Evolution still works,
+    # but @lid replies fail with 400).
+    # ----------------------------------------------------------------
+    REDIS_URL        = "${railway_plugin.redis.url}/0"
+    LID_TTL_SECONDS  = "86400"
   }
 
   depends_on = [railway_service.api, railway_plugin.redis]
