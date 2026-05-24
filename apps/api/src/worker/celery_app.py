@@ -12,6 +12,12 @@ from __future__ import annotations
 from celery import Celery
 
 from src.core.config import get_settings
+from src.core.observability import init_observability
+
+# Wire Sentry before constructing the Celery app so the CeleryIntegration
+# can hook into the lifecycle of every task. ``init_observability`` is a
+# no-op when SENTRY_DSN is unset, so local dev / tests stay quiet.
+init_observability(component="worker")
 
 settings = get_settings()
 

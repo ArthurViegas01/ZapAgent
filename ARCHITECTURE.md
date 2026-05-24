@@ -1,4 +1,4 @@
-# ZapAgent — Architecture
+# Encaixe — Architecture
 
 > WhatsApp AI assistant SaaS for Brazilian small businesses (barbershops,
 > clinics, pet shops, garages). This document captures the validated

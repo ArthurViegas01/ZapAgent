@@ -1,5 +1,5 @@
 -- =============================================================================
--- ZapAgent — initial schema (migration 0001).
+-- Encaixe — initial schema (migration 0001).
 --
 -- Multi-tenant by design. Every business-data table carries `tenant_id` and
 -- has Row Level Security policies that key off the `app.tenant_id` GUC. The
@@ -137,6 +137,7 @@ CREATE TABLE faq_items (
     updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE UNIQUE INDEX idx_faq_tenant_question ON faq_items(tenant_id, question);
 CREATE INDEX idx_faq_tenant ON faq_items(tenant_id);
 CREATE INDEX idx_faq_tenant_active ON faq_items(tenant_id) WHERE is_active;
 -- HNSW index over the embedding column; cosine distance.

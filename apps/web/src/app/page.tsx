@@ -4,7 +4,7 @@ export default function HomePage() {
   return (
     <main className="mx-auto flex min-h-screen max-w-4xl flex-col justify-center gap-6 px-6 py-16">
       <p className="text-sm font-medium uppercase tracking-widest text-brand-600">
-        ZapAgent
+        Encaixe
       </p>
       <h1 className="text-4xl font-semibold tracking-tight">
         Seu atendente no WhatsApp,{" "}

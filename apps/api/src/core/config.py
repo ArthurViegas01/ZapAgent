@@ -98,6 +98,8 @@ class Settings(BaseSettings):
 
     # -- Observability ----------------------------------------------------
     sentry_dsn: str = ""
+    sentry_traces_sample_rate: float = 0.1
+    sentry_release: str = ""  # Git SHA injected by CI; empty in local dev
     otel_exporter_otlp_endpoint: str = ""
 
     @property

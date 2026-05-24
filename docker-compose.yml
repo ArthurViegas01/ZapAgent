@@ -8,7 +8,7 @@
 services:
   postgres:
     image: pgvector/pgvector:pg16
-    container_name: zapagent-postgres
+    container_name: encaixe-postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-zapagent}
@@ -27,7 +27,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: zapagent-redis
+    container_name: encaixe-redis
     restart: unless-stopped
     ports:
       - "6379:6379"
@@ -60,8 +60,8 @@ services:
     build:
       context: ./apps/evolution
       dockerfile: Dockerfile
-    image: zapagent-evolution:local
-    container_name: zapagent-evolution
+    image: encaixe-evolution:local
+    container_name: encaixe-evolution
     restart: unless-stopped
     dns:
       - 8.8.8.8
@@ -94,6 +94,10 @@ services:
       CACHE_REDIS_URI: redis://redis:6379/3
       CACHE_REDIS_PREFIX_KEY: evolution
       CACHE_LOCAL_ENABLED: "false"
+      # -- @lid sender_pn intercept (lid_pipe.py, embedded in this image) --
+      # Same Redis DB as the API (db 0); webhook reads `lid_pn:{msg_id}` here.
+      REDIS_URL: redis://redis:6379/0
+      LID_TTL_SECONDS: "86400"
       # -- QR / logs -----------------------------------------------------
       QRCODE_LIMIT: "30"
       QRCODE_COLOR: "#007bff"
@@ -117,7 +121,7 @@ services:
       context: ./apps/api
       dockerfile: Dockerfile
       target: dev
-    container_name: zapagent-api
+    container_name: encaixe-api
     restart: unless-stopped
     depends_on:
       postgres:
@@ -149,7 +153,7 @@ services:
       context: ./apps/api
       dockerfile: Dockerfile
       target: dev
-    container_name: zapagent-worker
+    container_name: encaixe-worker
     restart: unless-stopped
     depends_on:
       postgres:

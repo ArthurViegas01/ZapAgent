@@ -123,9 +123,9 @@ async def _create_calendar_event(
 ) -> str:
     """Call Google Calendar API and return the event id."""
     event_body = {
-        "summary": draft.get("title", "Atendimento ZapAgent"),
+        "summary": draft.get("title", "Atendimento Encaixe"),
         "description": (
-            "Agendado via ZapAgent.\n"
+            "Agendado via Encaixe.\n"
             "Contato: " + contact_phone + "\n"
             + (draft.get("notes") or "")
         ).strip(),

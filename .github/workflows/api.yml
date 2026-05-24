@@ -104,12 +104,26 @@ jobs:
         run: pip install -e ".[dev]" --break-system-packages 2>/dev/null || pip install -e ".[dev]"
 
       - name: Run DB migrations
-        run: psql $DATABASE_URL_SYNC -f ../../db/migrations/0001_init.sql
+        # Apply 0001 (schema) and 0002 (JS-client RLS fix). Both are needed
+        # for the integration suite; the unit suite ignores RLS so 0002 was
+        # historically skipped — applying it here keeps CI honest against
+        # what Supabase production actually runs.
+        run: |
+          psql $DATABASE_URL_SYNC -v ON_ERROR_STOP=1 -f ../../db/migrations/0001_init.sql
+          psql $DATABASE_URL_SYNC -v ON_ERROR_STOP=1 -f ../../db/migrations/0002_fix_rls_for_js_client.sql
+          psql $DATABASE_URL_SYNC -v ON_ERROR_STOP=1 -f ../../db/migrations/0003_billing_trial.sql
         env:
           PGPASSWORD: postgres
 
-      - name: pytest
+      - name: pytest (unit)
         run: pytest tests/ -v --tb=short --no-header -q
+
+      - name: pytest (integration — tenant isolation)
+        # Real-DB tests gated by the `integration` marker. Skipped by default
+        # in the unit run via pyproject.addopts; we explicitly opt in here.
+        # If Postgres becomes unreachable, the suite skips with a clear msg
+        # instead of failing red on a transient infra issue.
+        run: pytest tests/integration -m integration -v --tb=short
 
   deploy:
     name: Deploy to Railway

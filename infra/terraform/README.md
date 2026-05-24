@@ -1,4 +1,4 @@
-# Terraform — ZapAgent infra
+# Terraform — Encaixe infra
 
 Two providers do the heavy lifting:
 

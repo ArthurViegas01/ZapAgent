@@ -1,4 +1,4 @@
-# ZapAgent
+# Encaixe
 
 WhatsApp AI assistant SaaS for Brazilian small businesses. The agent answers
 FAQs, schedules appointments on Google Calendar, and hands off to a human

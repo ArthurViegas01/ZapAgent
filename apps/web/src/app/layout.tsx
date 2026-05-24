@@ -12,7 +12,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "ZapAgent",
+  title: "Encaixe",
   description: "Atendente IA via WhatsApp para pequenos negócios.",
 };
 

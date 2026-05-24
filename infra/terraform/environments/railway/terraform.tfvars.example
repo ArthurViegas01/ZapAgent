@@ -15,10 +15,19 @@ supabase_db_url           = "postgresql://postgres.oodfxbrbawcnromvhjga:PASSWORD
 anthropic_api_key = "sk-ant-..."
 voyage_api_key    = "pa-..."
 
-# Evolution — pick a strong random string
-evolution_api_key = "change-me-to-a-strong-secret"
+# Evolution API admin key (used by API → Evolution control plane)
+evolution_api_key = "change-me-to-a-strong-secret-32+chars"
+
+# Evolution webhook token (used by Evolution → API webhook calls).
+# Different from the admin key by design (least privilege).
+# Generate with: python -c "import secrets; print(secrets.token_urlsafe(32))"
+evolution_webhook_token = "change-me-to-a-different-strong-secret"
 
 # Google OAuth
 google_oauth_client_id     = "799398426606-ctl50b2tub6oibparsu18hqvj59616pg.apps.googleusercontent.com"
 google_oauth_client_secret = "GOCSPX-..."
 google_oauth_redirect_uri  = "https://your-site.netlify.app/auth/google-calendar/callback"
+
+# Sentry — leave empty to skip; the wiring in code is a no-op when unset.
+sentry_dsn                = ""
+sentry_traces_sample_rate = 0.1

@@ -100,7 +100,7 @@ async def connect_whatsapp(
     import secrets as _secrets
 
     provider = get_whatsapp_provider()
-    instance_name = f"za-{ctx.tenant_id[:6]}-{_secrets.token_hex(4)}"
+    instance_name = f"enc-{ctx.tenant_id[:6]}-{_secrets.token_hex(4)}"
 
     logger.info(
         "integrations.whatsapp_connect_start",

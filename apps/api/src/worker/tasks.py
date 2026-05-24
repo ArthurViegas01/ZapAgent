@@ -89,10 +89,17 @@ async def _run_agent(
     tenant_settings: dict[str, Any],
     pool: Any,
 ) -> dict:
+    from src.agent.checkpointer import async_postgres_saver_scope  # noqa: PLC0415
+    from src.agent.context import set_db_pool  # noqa: PLC0415
     from src.agent.graph import build_graph  # noqa: PLC0415
     from src.agent.state import AgentState  # noqa: PLC0415
 
-    graph = build_graph()
+    # Thread the pool to retrieve_context via a task-scoped contextvar.
+    # LangGraph's `configurable` slot filters out our db_pool key, so
+    # passing it through `config={"configurable": {...}}` no longer reaches
+    # the node (verified empirically). See src/agent/context.py.
+    set_db_pool(pool)
+
     state = AgentState(
         tenant_id=tenant_id,
         conversation_id=conversation_id,
@@ -103,10 +110,28 @@ async def _run_agent(
     config = {
         "configurable": {
             "thread_id": f"{tenant_id}:{conversation_id}",
-            "db_pool": pool,
         }
     }
-    return await graph.ainvoke(state, config=config)
+
+    # Durable checkpointer per ARCHITECTURE.md §2.5 — survives worker
+    # restarts so a mid-conversation customer doesn't lose context.
+    # Saver is opened per task (the loop owns its pool) — see
+    # checkpointer.py docstring for why process-singletons crashed.
+    # If init fails (e.g. checkpoint tables can't be created on a read-
+    # only replica), fall back to MemorySaver so the turn still
+    # completes; next process restart re-attempts setup.
+    try:
+        async with async_postgres_saver_scope() as checkpointer:
+            graph = build_graph(checkpointer=checkpointer)
+            return await graph.ainvoke(state, config=config)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "worker.checkpointer_fallback_to_memory",
+            error=str(exc),
+            tenant_id=tenant_id,
+        )
+        graph = build_graph(checkpointer=None)
+        return await graph.ainvoke(state, config=config)
 
 
 async def _send_whatsapp_reply(instance_name: str, contact_phone: str, text: str) -> None:
@@ -147,21 +172,21 @@ async def _persist_outbound(pool: Any, tenant_id: str, conversation_id: str, con
 def purge_old_messages() -> dict:
     """Nightly LGPD retention: delete messages older than each tenant's retention window."""
     async def _run() -> dict:
-        from src.db.pool import get_worker_pool  # noqa: PLC0415
-        pool = await get_worker_pool()
-        async with pool.acquire() as conn:
-            result = await conn.fetchrow(
-                "WITH deleted AS ("
-                " DELETE FROM messages m USING tenants t"
-                " WHERE m.tenant_id = t.id"
-                " AND t.data_retention_days IS NOT NULL"
-                " AND m.created_at < now() - (t.data_retention_days || ' days')::interval"
-                " RETURNING m.id"
-                ") SELECT count(*) AS deleted_count FROM deleted"
-            )
-        count = result["deleted_count"] if result else 0
-        logger.info("retention.purge_done", deleted=count)
-        return {"deleted": count}
+        from src.db.pool import worker_pool_scope  # noqa: PLC0415
+        async with worker_pool_scope() as pool:
+            async with pool.acquire() as conn:
+                result = await conn.fetchrow(
+                    "WITH deleted AS ("
+                    " DELETE FROM messages m USING tenants t"
+                    " WHERE m.tenant_id = t.id"
+                    " AND t.data_retention_days IS NOT NULL"
+                    " AND m.created_at < now() - (t.data_retention_days || ' days')::interval"
+                    " RETURNING m.id"
+                    ") SELECT count(*) AS deleted_count FROM deleted"
+                )
+            count = result["deleted_count"] if result else 0
+            logger.info("retention.purge_done", deleted=count)
+            return {"deleted": count}
 
     return asyncio.run(_run())
 
@@ -179,47 +204,50 @@ def process_whatsapp_message(
     logger.info("worker.task.started", tenant_id=tenant_id, conversation_id=conversation_id, instance=instance_name)
 
     async def _main() -> dict:
-        from src.db.pool import get_worker_pool  # noqa: PLC0415
-        pool = await get_worker_pool()
+        from src.db.pool import worker_pool_scope  # noqa: PLC0415
 
-        # Skip opted-out contacts — do not run agent or reply.
-        if await _check_opted_out(pool, tenant_id, contact_phone):
-            logger.info("worker.opted_out_skip", tenant_id=tenant_id, contact_phone=contact_phone)
-            return {"conversation_id": conversation_id, "next_action": "opted_out", "response": ""}
+        # Pool is task-scoped: opens in this loop, closes when this loop
+        # exits. Sharing a pool across asyncio.run() calls crashes with
+        # "Event loop is closed".
+        async with worker_pool_scope() as pool:
+            # Skip opted-out contacts — do not run agent or reply.
+            if await _check_opted_out(pool, tenant_id, contact_phone):
+                logger.info("worker.opted_out_skip", tenant_id=tenant_id, contact_phone=contact_phone)
+                return {"conversation_id": conversation_id, "next_action": "opted_out", "response": ""}
 
-        tenant_settings = await _load_tenant_settings(pool, tenant_id)
-        final_state = await _run_agent(
-            tenant_id=tenant_id,
-            conversation_id=conversation_id,
-            contact_phone=contact_phone,
-            user_message=user_message,
-            tenant_settings=tenant_settings,
-            pool=pool,
-        )
-        response_text: str = final_state.get("response", "")
+            tenant_settings = await _load_tenant_settings(pool, tenant_id)
+            final_state = await _run_agent(
+                tenant_id=tenant_id,
+                conversation_id=conversation_id,
+                contact_phone=contact_phone,
+                user_message=user_message,
+                tenant_settings=tenant_settings,
+                pool=pool,
+            )
+            response_text: str = final_state.get("response", "")
 
-        # Persist opt-out if the agent classified the message as OPT_OUT.
-        from src.agent.state import Intent as _Intent  # noqa: PLC0415
-        if final_state.get("intent") == _Intent.OPT_OUT:
-            await _mark_opted_out(pool, tenant_id, conversation_id)
+            # Persist opt-out if the agent classified the message as OPT_OUT.
+            from src.agent.state import Intent as _Intent  # noqa: PLC0415
+            if final_state.get("intent") == _Intent.OPT_OUT:
+                await _mark_opted_out(pool, tenant_id, conversation_id)
 
-        if instance_name and response_text:
-            try:
-                await _send_whatsapp_reply(instance_name, contact_phone, response_text)
-            except Exception as exc:  # noqa: BLE001
-                logger.error("worker.reply_failed", error=str(exc))
+            if instance_name and response_text:
+                try:
+                    await _send_whatsapp_reply(instance_name, contact_phone, response_text)
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("worker.reply_failed", error=str(exc))
 
-        if response_text:
-            try:
-                await _persist_outbound(pool, tenant_id, conversation_id, response_text, final_state)
-            except Exception as exc:  # noqa: BLE001
-                logger.error("worker.persist_failed", error=str(exc))
+            if response_text:
+                try:
+                    await _persist_outbound(pool, tenant_id, conversation_id, response_text, final_state)
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("worker.persist_failed", error=str(exc))
 
-        return {
-            "conversation_id": conversation_id,
-            "next_action": final_state.get("next_action"),
-            "response": response_text,
-        }
+            return {
+                "conversation_id": conversation_id,
+                "next_action": final_state.get("next_action"),
+                "response": response_text,
+            }
 
     try:
         result = asyncio.run(_main())

@@ -8,13 +8,31 @@ top, the closer to ready.
 - [x] WhatsApp provider abstraction (Evolution + Stub)
 - [x] Request-ID middleware + readiness probe
 - [x] Demo flow without external WhatsApp gateway (`make demo`)
+- [x] LangGraph PostgresSaver wired to the live pool — durable
+      checkpoints, per-task scope (event-loop safe under Celery prefork)
+- [x] **`@lid` outbound reply path**. Python wrapper (`apps/evolution/
+      lid_pipe.py`) runs as PID 1 inside the Evolution container, spawns
+      Evolution as a subprocess, mirrors its stdout, and side-channels
+      Baileys `(message_id, sender_pn)` pairs into Redis as
+      `lid_pn:{message_id}` (24 h TTL). API webhook looks up the cache
+      when the inbound JID ends in `@lid` and patches `contact_phone`
+      before DB write / Celery dispatch. Cache miss falls through with a
+      warning log. Works in both docker-compose AND Railway (the earlier
+      Docker-SDK sidecar at `apps/api/src/sidecars/` only worked locally
+      because Railway services do not share `/var/run/docker.sock` —
+      removed in the refactor). Read side stays at
+      `apps/api/src/integrations/whatsapp/lid.py`. (2026-05-24 late)
+- [x] **Per-intent confidence rules in `check_confidence`**.
+      `GREETING`, `OPT_OUT`, and slot-incomplete `SCHEDULING` now early-
+      return with `confidence=1.0, next_action="respond"`;
+      `INFORMATION` / `PRICING` / `OTHER` keep the FAQ-score path.
+      (2026-05-24 EOD)
 - [ ] Wire structured logs to OpenTelemetry (`OTEL_EXPORTER_OTLP_ENDPOINT`
       already in settings; needs OTLP exporter + spans around graph nodes)
-- [ ] Sentry integration (`SENTRY_DSN` already in settings)
+- [x] Sentry integration (`SENTRY_DSN` already in settings) — wired in
+      `apps/api/src/core/observability.py`
 - [ ] Rate-limit circuit breaker (today: fail-open if Redis unreachable;
       switch to fail-closed after N consecutive Redis errors)
-- [ ] LangGraph PostgresSaver wired to the live pool (currently in-memory
-      checkpoints; ARCHITECTURE 2.5 promised durable state)
 - [ ] Backups + restore drill for Supabase (RTO < 1h, RPO < 24h target)
 - [ ] Per-tenant cost dashboards (`messages.token_usage` is captured;
       need a pg view + dashboard tile)

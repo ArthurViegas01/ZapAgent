@@ -12,6 +12,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from .core.config import Settings, get_settings
 from .core.logging import configure_logging, get_logger
+from .core.observability import init_observability
 
 logger = get_logger(__name__)
 
@@ -48,6 +49,10 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging()
+    # Sentry must initialize *before* the first request so middleware
+    # captures errors from the very first webhook hit. It is idempotent
+    # — multiple FastAPI apps in the test suite all share one client.
+    init_observability(component="api")
     settings = get_settings()
     logger.info(
         "api.startup",
@@ -76,7 +81,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
 
     app = FastAPI(
-        title="ZapAgent API",
+        title="Encaixe API",
         version="0.1.0",
         description="WhatsApp AI assistant — LangGraph orchestrator + REST.",
         lifespan=lifespan,

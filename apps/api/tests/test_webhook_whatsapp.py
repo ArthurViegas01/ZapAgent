@@ -97,6 +97,7 @@ def _make_mock_pool(tenant_id: str | None = "tenant-uuid-001") -> MagicMock:
         tenant_row,
         {"id": "conv-uuid-001"},
         {"opted_out": False},
+        {"subscription_status": "active", "trial_ends_at": None},
     ])
 
     return pool
@@ -226,7 +227,7 @@ def test_webhook_skips_non_text_message(client: TestClient) -> None:
 # ---------------------------------------------------------------------------
 
 def test_webhook_stores_qr_on_qrcode_event(app_client) -> None:
-    app, pool, c = app_client
+    _app, pool, c = app_client
     conn = _make_fresh_conn(pool)
 
     resp = c.post("/webhooks/whatsapp", json=QRCODE_BODY, headers=_token_headers())
@@ -252,7 +253,7 @@ def test_webhook_handles_qrcode_without_pool() -> None:
 # ---------------------------------------------------------------------------
 
 def test_webhook_marks_connected_on_open_state(app_client) -> None:
-    app, pool, c = app_client
+    _app, pool, c = app_client
     conn = _make_fresh_conn(pool)
 
     resp = c.post("/webhooks/whatsapp", json=CONNECTION_CONNECTED_BODY, headers=_token_headers())
@@ -264,7 +265,7 @@ def test_webhook_marks_connected_on_open_state(app_client) -> None:
 
 
 def test_webhook_marks_pending_on_close_state(app_client) -> None:
-    app, pool, c = app_client
+    _app, pool, c = app_client
     conn = _make_fresh_conn(pool)
 
     resp = c.post("/webhooks/whatsapp", json=CONNECTION_DISCONNECTED_BODY, headers=_token_headers())
@@ -280,7 +281,7 @@ def test_webhook_marks_pending_on_close_state(app_client) -> None:
 # ---------------------------------------------------------------------------
 
 def test_webhook_returns_tenant_none_when_not_found(app_client) -> None:
-    app, pool, c = app_client
+    _app, pool, c = app_client
     conn = _make_fresh_conn(pool)
     conn.fetchrow = AsyncMock(return_value=None)
 
@@ -291,12 +292,13 @@ def test_webhook_returns_tenant_none_when_not_found(app_client) -> None:
 
 
 def test_webhook_enqueues_celery_task_for_valid_message(app_client) -> None:
-    app, pool, c = app_client
+    _app, pool, c = app_client
     conn = _make_fresh_conn(pool)
     conn.fetchrow = AsyncMock(side_effect=[
         {"tenant_id": "tenant-uuid-001"},
         {"id": "conv-uuid-001"},
         {"opted_out": False},
+        {"subscription_status": "active", "trial_ends_at": None},
     ])
 
     with patch("src.worker.tasks.process_whatsapp_message.delay") as mock_delay:
@@ -310,3 +312,111 @@ def test_webhook_enqueues_celery_task_for_valid_message(app_client) -> None:
     assert kwargs["contact_phone"] == "5511999990001"
     assert "Quero agendar" in kwargs["user_message"]
     assert kwargs["instance_name"] == INSTANCE
+
+
+# ---------------------------------------------------------------------------
+# @lid resolution (privacy-mode WhatsApp accounts)
+# ---------------------------------------------------------------------------
+
+LID_INBOUND_BODY: dict[str, Any] = {
+    "event": "MESSAGES_UPSERT",
+    "instance": INSTANCE,
+    "data": {
+        "key": {
+            # Masked privacy-mode JID — the digits BEFORE the colon are an
+            # opaque WhatsApp internal id, not a phone. The sidecar caches
+            # the real phone keyed by `id` so we can recover it here.
+            "remoteJid": "265884312559697:56@lid",
+            "fromMe": False,
+            "id": "3EB0C8ADEC0C8974F7E361",
+        },
+        "message": {"conversation": "Oi, qual o horario?"},
+        "pushName": "lorenzo",
+    },
+}
+
+
+def test_webhook_resolves_lid_phone_before_enqueue(app_client) -> None:
+    """When the inbound JID is @lid and the sidecar has cached the real
+    phone, the Celery task must receive the resolved number, not the
+    masked digits.
+    """
+    _app, pool, c = app_client
+    conn = _make_fresh_conn(pool)
+    conn.fetchrow = AsyncMock(side_effect=[
+        {"tenant_id": "tenant-uuid-001"},
+        {"id": "conv-uuid-001"},
+        {"opted_out": False},
+        {"subscription_status": "active", "trial_ends_at": None},
+    ])
+
+    with patch(
+        "src.api.webhooks.whatsapp.resolve_lid_phone",
+        new=AsyncMock(return_value="555191079110"),
+    ) as mock_resolve, patch(
+        "src.worker.tasks.process_whatsapp_message.delay"
+    ) as mock_delay:
+        resp = c.post("/webhooks/whatsapp", json=LID_INBOUND_BODY, headers=_token_headers())
+
+    assert resp.status_code == 200
+    assert resp.json().get("queued") is True
+    mock_resolve.assert_awaited_once_with("3EB0C8ADEC0C8974F7E361")
+    kwargs = mock_delay.call_args.kwargs
+    # The resolved phone, not the masked "265884312559697:56".
+    assert kwargs["contact_phone"] == "555191079110"
+
+
+def test_webhook_falls_through_when_lid_resolution_misses(app_client) -> None:
+    """If the sidecar hasn't cached the JID yet (race) the webhook must
+    NOT drop the message — it queues with whatever contact_phone the
+    provider gave (so the inbound is still persisted and the gap shows
+    up in logs).
+    """
+    _app, pool, c = app_client
+    conn = _make_fresh_conn(pool)
+    conn.fetchrow = AsyncMock(side_effect=[
+        {"tenant_id": "tenant-uuid-001"},
+        {"id": "conv-uuid-001"},
+        {"opted_out": False},
+        {"subscription_status": "active", "trial_ends_at": None},
+    ])
+
+    with patch(
+        "src.api.webhooks.whatsapp.resolve_lid_phone",
+        new=AsyncMock(return_value=None),
+    ), patch(
+        "src.worker.tasks.process_whatsapp_message.delay"
+    ) as mock_delay:
+        resp = c.post("/webhooks/whatsapp", json=LID_INBOUND_BODY, headers=_token_headers())
+
+    assert resp.status_code == 200
+    assert resp.json().get("queued") is True
+    kwargs = mock_delay.call_args.kwargs
+    # parse_inbound_message uses jid.split("@")[0] -> "265884312559697:56".
+    assert kwargs["contact_phone"] == "265884312559697:56"
+
+
+def test_webhook_skips_lid_lookup_for_regular_phone(app_client) -> None:
+    """Pre-privacy WA accounts arrive with @s.whatsapp.net JIDs. The
+    resolver MUST NOT be called for those — every webhook hit doing a
+    Redis round trip is wasted latency for the common path.
+    """
+    _app, pool, c = app_client
+    conn = _make_fresh_conn(pool)
+    conn.fetchrow = AsyncMock(side_effect=[
+        {"tenant_id": "tenant-uuid-001"},
+        {"id": "conv-uuid-001"},
+        {"opted_out": False},
+        {"subscription_status": "active", "trial_ends_at": None},
+    ])
+
+    with patch(
+        "src.api.webhooks.whatsapp.resolve_lid_phone",
+        new=AsyncMock(return_value="never-called"),
+    ) as mock_resolve, patch(
+        "src.worker.tasks.process_whatsapp_message.delay"
+    ):
+        resp = c.post("/webhooks/whatsapp", json=INBOUND_MESSAGE_BODY, headers=_token_headers())
+
+    assert resp.status_code == 200
+    mock_resolve.assert_not_awaited()

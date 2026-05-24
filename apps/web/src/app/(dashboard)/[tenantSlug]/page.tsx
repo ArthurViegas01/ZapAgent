@@ -58,6 +58,34 @@ async function fetchWhatsappStatus(tenantId: string) {
   return data;
 }
 
+/**
+ * Read the tenant's billing snapshot — drives the trial-countdown /
+ * subscription-paused banner. Mirrors the API's `GET /v1/tenants/{id}/billing`
+ * shape so the same fields can be reused if/when we add a client-side
+ * refresh; today the dashboard fetches at render time via the service
+ * client (no JWT round-trip).
+ */
+async function fetchBillingStatus(tenantId: string): Promise<{
+  status: string;
+  days_left: number | null;
+  trial_ends_at: string | null;
+}> {
+  const supabase = createServiceClient();
+  const { data } = await supabase
+    .from("tenants")
+    .select("subscription_status, trial_ends_at")
+    .eq("id", tenantId)
+    .single();
+  const status = (data?.subscription_status ?? "trialing") as string;
+  const trialEnds = data?.trial_ends_at ?? null;
+  let daysLeft: number | null = null;
+  if (trialEnds) {
+    const ms = new Date(trialEnds).getTime() - Date.now();
+    daysLeft = Math.max(0, Math.floor(ms / (1000 * 60 * 60 * 24)));
+  }
+  return { status, days_left: daysLeft, trial_ends_at: trialEnds };
+}
+
 export default async function TenantOverviewPage({
   params,
 }: {
@@ -65,13 +93,19 @@ export default async function TenantOverviewPage({
 }) {
   const tenant = await requireTenant(params.tenantSlug);
 
-  const [metrics, recentConvs, whatsapp] = await Promise.all([
+  const [metrics, recentConvs, whatsapp, billing] = await Promise.all([
     fetchMetrics(tenant.tenantId),
     fetchRecentConversations(tenant.tenantId),
     fetchWhatsappStatus(tenant.tenantId),
+    fetchBillingStatus(tenant.tenantId),
   ]);
 
   const isConnected = whatsapp?.status === "connected";
+  // Banner is shown for any non-active state worth the customer's attention.
+  // "active" → silent (paying customer in good standing).
+  // "trialing" → countdown.
+  // "past_due" / "suspended" → urgent banner with action.
+  const showBillingBanner = billing.status !== "active";
 
   return (
     <div className="flex flex-col gap-6">
@@ -80,6 +114,16 @@ export default async function TenantOverviewPage({
         <h1 className="text-2xl font-semibold">Visão geral</h1>
         <p className="text-sm text-slate-500">Últimas 24 horas · {tenant.tenantName}</p>
       </header>
+
+      {/* Billing banner (trial / past_due / suspended). Above the WhatsApp
+          banner because billing is the more urgent state — a paused account
+          can't reply to anyone regardless of WhatsApp status. */}
+      {showBillingBanner && (
+        <BillingBanner
+          status={billing.status}
+          daysLeft={billing.days_left}
+        />
+      )}
 
       {/* WhatsApp not connected banner */}
       {!isConnected && (
@@ -181,6 +225,59 @@ export default async function TenantOverviewPage({
           </div>
         )}
       </section>
+    </div>
+  );
+}
+
+function BillingBanner({
+  status,
+  daysLeft,
+}: {
+  status: string;
+  daysLeft: number | null;
+}) {
+  // Style and copy are derived from status so we have one component for
+  // every non-active state and no chance of UI drift between cases.
+  const isExpired = status === "trialing" && (daysLeft ?? 0) <= 0;
+  const isSuspended = status === "suspended";
+  const isPastDue = status === "past_due";
+  const isTrialing = status === "trialing" && !isExpired;
+
+  const palette = isExpired || isSuspended
+    ? { border: "border-red-200", bg: "bg-red-50", icon: "bg-red-100", iconTxt: "text-red-600", title: "text-red-800", body: "text-red-600" }
+    : isPastDue
+      ? { border: "border-orange-200", bg: "bg-orange-50", icon: "bg-orange-100", iconTxt: "text-orange-600", title: "text-orange-800", body: "text-orange-600" }
+      : { border: "border-blue-200", bg: "bg-blue-50", icon: "bg-blue-100", iconTxt: "text-blue-600", title: "text-blue-800", body: "text-blue-600" };
+
+  const title = isExpired
+    ? "Período de teste encerrado"
+    : isSuspended
+      ? "Assinatura pausada"
+      : isPastDue
+        ? "Pagamento em atraso"
+        : `Período de teste — ${daysLeft} ${daysLeft === 1 ? "dia restante" : "dias restantes"}`;
+
+  const subtitle = isExpired
+    ? "O atendimento automático foi pausado. Entre em contato para reativar."
+    : isSuspended
+      ? "O agente parou de responder os seus clientes. Regularize para retomar."
+      : isPastDue
+        ? "Seu agente continua respondendo, mas o pagamento pendente precisa ser regularizado em breve."
+        : "Após o término, será necessário ativar a assinatura para continuar respondendo seus clientes.";
+
+  return (
+    <div className={`flex items-center justify-between rounded-xl border ${palette.border} ${palette.bg} px-5 py-4`}>
+      <div className="flex items-center gap-3">
+        <div className={`flex h-8 w-8 items-center justify-center rounded-full ${palette.icon}`}>
+          <svg viewBox="0 0 20 20" fill="currentColor" className={`h-4 w-4 ${palette.iconTxt}`}>
+            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm.75-13a.75.75 0 00-1.5 0v5c0 .414.336.75.75.75h4a.75.75 0 000-1.5h-3.25V5z" clipRule="evenodd" />
+          </svg>
+        </div>
+        <div>
+          <p className={`text-sm font-medium ${palette.title}`}>{title}</p>
+          <p className={`text-xs ${palette.body}`}>{subtitle}</p>
+        </div>
+      </div>
     </div>
   );
 }

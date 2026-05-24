@@ -82,7 +82,7 @@ async def main() -> int:
         return 2
 
     print("=" * 64)
-    print("ZapAgent demo -- StubProvider end-to-end conversation")
+    print("Encaixe demo -- StubProvider end-to-end conversation")
     print("=" * 64)
     print("Provider:", provider.name)
     print("Tenant  :", DEMO_TENANT_ID)

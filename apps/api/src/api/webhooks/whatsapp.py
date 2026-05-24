@@ -13,6 +13,7 @@ lives below.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from typing import Any
 
@@ -23,6 +24,7 @@ from fastapi.responses import JSONResponse
 from src.core.config import get_settings
 from src.core.logging import get_logger
 from src.integrations.whatsapp import get_whatsapp_provider
+from src.integrations.whatsapp.lid import resolve_lid_phone
 from src.worker.tasks import process_whatsapp_message
 
 logger = get_logger(__name__)
@@ -249,6 +251,31 @@ async def receive_whatsapp_event(request: Request, event_path: str = "") -> JSON
         skip_reason = _classify_messages_skip_reason(body)
         return JSONResponse({"ok": True, "skipped": skip_reason})
 
+    # @lid resolution: privacy-mode WA contacts arrive with a masked JID like
+    # ``<digits>:<device>@lid`` and the digits aren't a valid phone — sendText
+    # would 400 on the way back out. The sidecar (src.sidecars.lid_resolver)
+    # caches the real phone keyed by provider_message_id; look it up here so
+    # everything downstream (DB conversation row, Celery task) sees the right
+    # number. Missing the cache is non-fatal: we keep the masked phone and
+    # log so we can spot the gap.
+    raw_jid = ((body.get("data") or {}).get("key") or {}).get("remoteJid", "")
+    if isinstance(raw_jid, str) and raw_jid.endswith("@lid"):
+        resolved = await resolve_lid_phone(inbound.provider_message_id)
+        if resolved:
+            logger.info(
+                "webhook.lid_resolved",
+                provider_message_id=inbound.provider_message_id,
+                masked_phone=inbound.contact_phone,
+                resolved_phone=resolved,
+            )
+            inbound = dataclasses.replace(inbound, contact_phone=resolved)
+        else:
+            logger.warning(
+                "webhook.lid_unresolved",
+                provider_message_id=inbound.provider_message_id,
+                masked_phone=inbound.contact_phone,
+            )
+
     logger.info(
         "webhook.messages_upsert",
         instance=instance_name,
@@ -301,6 +328,40 @@ async def receive_whatsapp_event(request: Request, event_path: str = "") -> JSON
     if opted_row and opted_row["opted_out"]:
         logger.info("webhook.opted_out_skipped", conversation_id=conversation_id)
         return JSONResponse({"ok": True, "skipped": "opted_out"})
+
+    # Subscription gate: trial expired / suspended tenants get a polite
+    # pt-BR message and skip the Celery dispatch. The agent never sees
+    # the turn, so we don't pay LLM tokens for a non-paying customer.
+    # See ``core/billing_gate.py`` for the decision matrix.
+    from src.core.billing_gate import check_subscription  # noqa: PLC0415
+    from src.integrations.whatsapp import get_whatsapp_provider as _gp  # noqa: PLC0415
+
+    gate = await check_subscription(pool, tenant_id)
+    if not gate.allowed:
+        logger.info(
+            "webhook.billing_blocked",
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+            status=gate.status,
+            reason=gate.reason,
+        )
+        # Best-effort reply so the customer doesn't sit in dead air.
+        # Failure here is non-fatal — we already accepted the webhook.
+        try:
+            await _gp().send_text(
+                instance_name=instance_name,
+                phone=inbound.contact_phone,
+                text=gate.reply_to_customer,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "webhook.billing_block_reply_failed",
+                instance=instance_name,
+                error=str(exc),
+            )
+        return JSONResponse(
+            {"ok": True, "skipped": "billing", "billing_status": gate.status}
+        )
 
     process_whatsapp_message.delay(
         tenant_id=tenant_id,

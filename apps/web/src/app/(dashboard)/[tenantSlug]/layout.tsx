@@ -88,7 +88,7 @@ export default async function TenantLayout({
           </div>
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold text-slate-900">{tenant.tenantName}</p>
-            <p className="text-xs text-slate-400">ZapAgent</p>
+            <p className="text-xs text-slate-400">Encaixe</p>
           </div>
         </div>
 

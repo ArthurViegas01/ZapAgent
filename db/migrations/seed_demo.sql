@@ -3,7 +3,13 @@
 
 BEGIN;
 
-INSERT INTO tenants (id, slug, name, settings, data_retention_days)
+-- subscription_status = 'active' so `make demo` is never blocked by the
+-- billing gate added in migration 0003. Avoids the "trialing with NULL
+-- trial_ends_at" warning path when the seed lands on a fresh DB.
+INSERT INTO tenants (
+    id, slug, name, settings, data_retention_days,
+    subscription_status, trial_ends_at
+)
 VALUES (
     '00000000-0000-0000-0000-0000000d3070',
     'demo',
@@ -12,11 +18,14 @@ VALUES (
         'agent_persona', 'Atendente educado e prestativo de um salao de beleza.',
         'business_hours', jsonb_build_object('open', '09:00', 'close', '19:00')
     ),
-    365
+    365,
+    'active',
+    NULL
 )
 ON CONFLICT (id) DO UPDATE
-SET name     = EXCLUDED.name,
-    settings = EXCLUDED.settings;
+SET name                = EXCLUDED.name,
+    settings            = EXCLUDED.settings,
+    subscription_status = EXCLUDED.subscription_status;
 
 INSERT INTO faq_items (tenant_id, question, answer)
 VALUES
