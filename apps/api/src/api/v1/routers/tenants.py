@@ -10,6 +10,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
+from ....core.billing_gate import check_subscription
 from ..dependencies import TenantContext, require_owner_or_admin, require_tenant
 
 router = APIRouter(prefix="/v1/tenants/{tenant_id}", tags=["tenants"])
@@ -107,4 +108,28 @@ async def patch_tenant(
         plan=row["plan"],
         status=row["status"],
         settings=dict(row["settings"] or {}),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Billing status — read-only snapshot for the dashboard banner.
+# Reuses ``core.billing_gate.check_subscription`` so the UI can never
+# disagree with the runtime gate that protects the webhook handler.
+# ---------------------------------------------------------------------------
+
+class BillingStatusOut(BaseModel):
+    status: str
+    days_left: int | None
+    allowed: bool
+
+
+@router.get("/billing", response_model=BillingStatusOut)
+async def get_billing_status(
+    ctx: TenantContext = Depends(require_tenant),
+) -> BillingStatusOut:
+    gate = await check_subscription(ctx.pool, ctx.tenant_id)
+    return BillingStatusOut(
+        status=gate.status,
+        days_left=gate.days_left,
+        allowed=gate.allowed,
     )

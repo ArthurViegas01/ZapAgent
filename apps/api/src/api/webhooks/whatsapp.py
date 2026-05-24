@@ -302,6 +302,40 @@ async def receive_whatsapp_event(request: Request, event_path: str = "") -> JSON
         logger.info("webhook.opted_out_skipped", conversation_id=conversation_id)
         return JSONResponse({"ok": True, "skipped": "opted_out"})
 
+    # Subscription gate: trial expired / suspended tenants get a polite
+    # pt-BR message and skip the Celery dispatch. The agent never sees
+    # the turn, so we don't pay LLM tokens for a non-paying customer.
+    # See ``core/billing_gate.py`` for the decision matrix.
+    from src.core.billing_gate import check_subscription  # noqa: PLC0415
+    from src.integrations.whatsapp import get_whatsapp_provider as _gp  # noqa: PLC0415
+
+    gate = await check_subscription(pool, tenant_id)
+    if not gate.allowed:
+        logger.info(
+            "webhook.billing_blocked",
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+            status=gate.status,
+            reason=gate.reason,
+        )
+        # Best-effort reply so the customer doesn't sit in dead air.
+        # Failure here is non-fatal — we already accepted the webhook.
+        try:
+            await _gp().send_text(
+                instance_name=instance_name,
+                phone=inbound.contact_phone,
+                text=gate.reply_to_customer,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "webhook.billing_block_reply_failed",
+                instance=instance_name,
+                error=str(exc),
+            )
+        return JSONResponse(
+            {"ok": True, "skipped": "billing", "billing_status": gate.status}
+        )
+
     process_whatsapp_message.delay(
         tenant_id=tenant_id,
         conversation_id=conversation_id,

@@ -97,6 +97,7 @@ def _make_mock_pool(tenant_id: str | None = "tenant-uuid-001") -> MagicMock:
         tenant_row,
         {"id": "conv-uuid-001"},
         {"opted_out": False},
+        {"subscription_status": "active", "trial_ends_at": None},
     ])
 
     return pool
@@ -297,6 +298,7 @@ def test_webhook_enqueues_celery_task_for_valid_message(app_client) -> None:
         {"tenant_id": "tenant-uuid-001"},
         {"id": "conv-uuid-001"},
         {"opted_out": False},
+        {"subscription_status": "active", "trial_ends_at": None},
     ])
 
     with patch("src.worker.tasks.process_whatsapp_message.delay") as mock_delay:

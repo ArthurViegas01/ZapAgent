@@ -89,10 +89,28 @@ async def _run_agent(
     tenant_settings: dict[str, Any],
     pool: Any,
 ) -> dict:
+    from src.agent.checkpointer import get_async_postgres_saver  # noqa: PLC0415
     from src.agent.graph import build_graph  # noqa: PLC0415
     from src.agent.state import AgentState  # noqa: PLC0415
 
-    graph = build_graph()
+    # Durable checkpointer per ARCHITECTURE.md §2.5 — survives worker
+    # restarts so a mid-conversation customer doesn't lose context.
+    # If the saver fails to initialize (e.g. checkpoint tables can't be
+    # created on a read-only replica), fall back to MemorySaver so the
+    # turn still completes; the next process restart will re-attempt
+    # setup. We do NOT silently swallow connection errors here — those
+    # are logged in observability and surface in Sentry.
+    try:
+        checkpointer = await get_async_postgres_saver()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "worker.checkpointer_fallback_to_memory",
+            error=str(exc),
+            tenant_id=tenant_id,
+        )
+        checkpointer = None  # build_graph defaults to MemorySaver
+
+    graph = build_graph(checkpointer=checkpointer)
     state = AgentState(
         tenant_id=tenant_id,
         conversation_id=conversation_id,
