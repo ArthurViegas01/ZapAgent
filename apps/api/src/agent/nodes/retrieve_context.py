@@ -63,7 +63,7 @@ async def _query_faq(
     """
     async with pool.acquire() as conn:
         async with conn.transaction():
-            await conn.execute("SET LOCAL app.tenant_id = $1", tenant_id)
+            await conn.execute("SELECT set_config('app.tenant_id', $1, true)", tenant_id)
             rows = await conn.fetch(
                 "SELECT id::text, question, answer,"
                 " (1 - (embedding <=> $1::vector))::float AS score"

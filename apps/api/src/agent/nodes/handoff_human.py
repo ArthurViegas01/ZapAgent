@@ -58,7 +58,7 @@ async def _notify_owner(instance_name: str, owner_phone: str, contact_phone: str
     if not cfg.evolution_api_key or not instance_name or not owner_phone:
         return
     text = (
-        f"ZapAgent - Atencao necessaria\n\n"
+        f"Encaixe - Atencao necessaria\n\n"
         f"Cliente {contact_phone} precisa de atendimento humano.\n"
         f"Motivo: {reason}\n\n"
         "Acesse o dashboard para ver a conversa."

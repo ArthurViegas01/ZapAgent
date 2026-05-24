@@ -6,7 +6,156 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed (local-test pass, 2026-05-24)
+Bugs caught when running the full TESTING.md playbook end-to-end. All
+test suites passing after these: 83/83 unit, 3/3 integration, 4/4 demo
+conversations, smoke API checks.
+
+- `db/migrations/0001_init.sql` — added missing `CREATE UNIQUE INDEX
+  idx_faq_tenant_question ON faq_items(tenant_id, question)`. The
+  `seed_demo.sql` script already used `ON CONFLICT (tenant_id, question)`
+  without the constraint existing, so re-running the seed silently
+  inserted duplicates.
+- `db/migrations/0002_fix_rls_for_js_client.sql` — created an `auth.uid()`
+  stub (returns NULL) under a fresh `auth` schema. Supabase provides
+  this natively in production; local Postgres does not, and migration
+  0002 references it in the new policies, breaking `make migrate` on a
+  clean DB. The stub returning NULL is correct semantically: locally
+  there is no Supabase JWT, so the policy path that uses `auth.uid()`
+  must short-circuit to "no match" instead of throwing.
+  **Follow-up applied immediately:** the original fix used
+  `CREATE OR REPLACE FUNCTION`, which in Supabase would overwrite their
+  real `auth.uid()` with the NULL stub and silently break all JS-client
+  RLS reads in production. Wrapped in a `DO`/`pg_proc` existence check
+  so the CREATE only runs when the function is absent — no-op under
+  Supabase, creates the stub locally.
+- `apps/api/src/core/observability.py` — added `.strip()` to the DSN
+  guard. pydantic-settings preserves inline comments after `VAR=` in
+  `.env` files (the value becomes `" # optional"` literally), which
+  crashed `sentry_sdk.init` on boot. Also normalized the `.env.example`
+  to put comments on their own line.
+- `Makefile` — `up-stub` no longer uses the Unix-only inline-env syntax
+  (`VAR=value make ...`); under Windows Make that pattern is silently
+  swallowed. `WHATSAPP_PROVIDER` is now expected to live in `.env` (per
+  TESTING.md A.1) and the target just runs `docker compose up`.
+- `apps/api/tests/integration/test_rls_isolation.py` (+ conftest) —
+  replaced `SET LOCAL app.tenant_id = $1` with
+  `SELECT set_config('app.tenant_id', $1, true)`. Postgres rejects bind
+  parameters in `SET LOCAL` syntactically; `set_config(name, value,
+  is_local=true)` is the documented equivalent that accepts parameters.
+- `apps/api/pyproject.toml` — added
+  `asyncio_default_fixture_loop_scope = "session"` so the
+  session-scoped DB pool fixture stops fighting pytest-asyncio's default
+  function-scoped loop. The integration suite required this to stop
+  recreating the pool per test.
+- `apps/api/tests/test_webhook_whatsapp.py` — adjusted the asyncpg
+  fetchrow mock ordering. The billing-gate check I added in P0 #5
+  consumes one fetchrow before the webhook handler's existing reads,
+  shifting every downstream mock by one slot.
+
 ### Added
+- **Local testing runbook** (`TESTING.md`, `make smoke-local`).
+  Reproducible playbook for validating the full stack on a developer
+  laptop before deploying. Two paths — (A) StubProvider, exercises
+  LangGraph + webhook + Celery + billing gate offline; (B) Evolution
+  real, full WhatsApp pairing + message round-trip. Each path lists
+  explicitly what it does NOT cover so the operator knows when to
+  switch. Includes a triage table for the common local failures.
+  `make smoke-local` reuses `scripts/smoke_test_prod.py` against
+  `localhost:8000` / `:3000` — same script that gates production.
+- **Deploy runbook + smoke test** (`DEPLOY.md`, `scripts/smoke_test_prod.py`).
+  `DEPLOY.md` reorganized as a 10-step checklist runbook (prereqs, secrets,
+  Supabase migrations, Terraform Railway, Netlify, GitHub secrets, smoke
+  test, pilot tenant + WhatsApp connection, billing, rollback). Companion
+  Python smoke test (stdlib-only, no repo deps) probes `/health`, `/ready`,
+  the dashboard root + login route, and optionally the billing endpoint
+  with a real JWT — for use right after `terraform apply` succeeds.
+
+### Fixed
+- **Terraform Railway env: 4 production-blocking gaps closed**
+  (`infra/terraform/environments/railway/{main,variables,terraform.tfvars.example}.tf`,
+  `.github/workflows/terraform.yml`, `.github/workflows/web.yml`):
+  1. Evolution service now builds from `apps/evolution/Dockerfile` instead
+     of `atendai/evolution-api:latest`, preserving the Baileys 6.7.9 pin
+     that fixes the noise-protocol handshake (without this, QR never
+     generates in production — same bug already proven locally).
+  2. `EVOLUTION_WEBHOOK_BASE_URL` now defaults to the API service's public
+     URL on Railway; the settings default of `http://api:8000/...` is a
+     docker-compose-only DNS name that never resolved in prod, so inbound
+     webhooks were silently dropped.
+  3. `EVOLUTION_WEBHOOK_TOKEN` is now an explicit Terraform variable
+     instead of relying on the `"changeme"` default (which "worked" by
+     accident as long as both sides agreed on the placeholder).
+  4. `SENTRY_DSN`, `SENTRY_TRACES_SAMPLE_RATE`, and `SENTRY_RELEASE`
+     (the last derived from Railway's built-in `$RAILWAY_GIT_COMMIT_SHA`)
+     are now propagated to both api and worker services, so the wiring
+     added earlier actually fires in production. `web.yml` also threads
+     `NEXT_PUBLIC_SENTRY_DSN` through the Netlify build for the upcoming
+     `@sentry/nextjs` follow-up.
+- **Subscription gate (trial + suspension), no Asaas dependency**
+  (`apps/api/src/core/billing_gate.py`,
+  `db/migrations/0003_billing_trial.sql`).
+  New columns `tenants.subscription_status` (`trialing | active | past_due
+  | suspended`, default `trialing`) and `tenants.trial_ends_at`, plus a
+  partial index. Backfill grants existing tenants a 14-day trial.
+  The webhook handler in `api/webhooks/whatsapp.py` now calls
+  `check_subscription(pool, tenant_id)` before enqueuing Celery work; if
+  the gate denies, we reply to the customer in pt-BR (`trial_expired` /
+  `suspended` / `tenant_not_found`) via the active WhatsApp provider and
+  skip the agent run — no LLM tokens burned for a non-paying customer.
+  `past_due` is grace-period (still allowed); operations alert through
+  the dashboard, not by silently dropping the customer.
+  New `GET /v1/tenants/{tenant_id}/billing` endpoint exposes the same
+  decision to the dashboard so banner copy and runtime gate cannot drift.
+  Overview page shows a `BillingBanner` for every non-`active` state
+  (trial countdown, past-due warning, suspended pause). Unit tests in
+  `tests/test_billing_gate.py` cover the full status matrix.
+  Migration 0003 applied in `make migrate`, `make test-integration`, and
+  CI; `seed_demo.sql` updated to set `subscription_status='active'` so
+  `make demo` is never blocked.
+- **LangGraph PostgresSaver durable checkpoints** (`apps/api/src/agent/checkpointer.py`).
+  Fulfills the promise in ARCHITECTURE.md §2.5: conversation state now
+  survives worker restarts via `AsyncPostgresSaver` instead of evaporating
+  with `MemorySaver`. Process-level psycopg `AsyncConnectionPool` (size 1-4)
+  amortizes connection cost across Celery tasks; `setup()` runs exactly once
+  per process under an `asyncio.Lock`. `worker.tasks._run_agent` now wires
+  the saver into `build_graph(checkpointer=...)`, with a logged fallback to
+  `MemorySaver` if init fails (turn still completes; failure is surfaced via
+  Sentry rather than blocking the customer).
+  New unit tests in `tests/agent/test_checkpointer_wiring.py` cover the
+  custom-checkpointer pass-through and the fallback branch without needing
+  a real Postgres.
+  New deps: `psycopg-pool>=3.2.0`.
+- **Sentry wiring for API + Worker** (`apps/api/src/core/observability.py`).
+  Single `init_observability(component=...)` entrypoint, idempotent, no-op
+  when `SENTRY_DSN` is empty. Wired with FastAPI/Starlette, Celery (with
+  beat task monitoring), httpx and asyncpg integrations. Logging
+  integration is disabled on purpose so structlog stays the single source
+  of truth for application logs — only exceptions reach Sentry.
+  `send_default_pii=False` keeps WhatsApp message bodies out of issues.
+  New settings: `SENTRY_TRACES_SAMPLE_RATE` (default 0.1) and
+  `SENTRY_RELEASE` (set by CI from `$GITHUB_SHA`).
+  Follow-up: Next.js Sentry init (`@sentry/nextjs`) — needs a `pnpm add`
+  pass; tracked separately.
+- **Tenant-isolation integration tests** (`apps/api/tests/integration/`).
+  Three real-database tests that prove the three doors through which a
+  multi-tenant data leak could happen are sealed:
+  1. RLS via the `app.tenant_id` GUC actually filters rows when the
+     connection role is `NOBYPASSRLS` (a dedicated `app_user_test` role
+     is created idempotently inside the fixture).
+  2. `retrieve_context._query_faq` returns only the requesting tenant's
+     FAQ rows, even with a vector that would match every seeded row.
+  3. `webhooks.whatsapp._resolve_tenant` maps instance_name → tenant_id
+     correctly and returns `None` for unknown instances.
+  Gated behind the `integration` pytest marker (`pytest -m integration`)
+  and skipped automatically if Postgres is unreachable, so they don't
+  break devs without `docker compose up`.
+- `make test-integration` Makefile target that applies both migrations
+  idempotently and runs the integration suite inside the API container.
+- CI `api.yml` now (a) applies migration `0002_fix_rls_for_js_client.sql`
+  in addition to `0001_init.sql` (it was being skipped, so CI was
+  drifting from production), and (b) runs the integration suite in a
+  dedicated step after the unit run.
 - **WhatsApp provider abstraction** (`apps/api/src/integrations/whatsapp/`).
   The pipeline now talks to a `WhatsAppProvider` interface; concrete
   implementations live alongside it (`evolution.py`, `stub.py`).

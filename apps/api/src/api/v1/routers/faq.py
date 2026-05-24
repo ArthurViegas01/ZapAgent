@@ -69,7 +69,7 @@ async def _reindex_faq(pool: Any, faq_id: str, tenant_id: str, text: str) -> Non
 
         async with pool.acquire() as conn:
             async with conn.transaction():
-                await conn.execute("SET LOCAL app.tenant_id = $1", tenant_id)
+                await conn.execute("SELECT set_config('app.tenant_id', $1, true)", tenant_id)
                 await conn.execute(
                     "UPDATE faq_items SET embedding = $1::vector WHERE id = $2::uuid",
                     vec_lit,

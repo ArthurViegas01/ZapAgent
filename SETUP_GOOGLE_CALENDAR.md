@@ -5,7 +5,7 @@
 ### 1. Criar projeto no Google Cloud
 
 1. Acesse https://console.cloud.google.com
-2. Clique em **"Novo projeto"** → dê um nome (ex: ZapAgent) → Criar
+2. Clique em **"Novo projeto"** → dê um nome (ex: Encaixe) → Criar
 3. No menu lateral: **APIs e Servicos → Biblioteca**
 4. Pesquise **"Google Calendar API"** → Ativar
 
@@ -13,7 +13,7 @@
 
 1. Menu lateral: **APIs e Servicos → Tela de permissao OAuth**
 2. Tipo: **Externo** → Criar
-3. Preencha: Nome do app (ZapAgent), email de suporte
+3. Preencha: Nome do app (Encaixe), email de suporte
 4. Em "Escopos": adicionar `../auth/calendar.events`
 5. Em "Usuarios de teste": adicionar seu email
 6. Salvar
@@ -23,7 +23,7 @@
 1. Menu lateral: **APIs e Servicos → Credenciais**
 2. **Criar credenciais → ID do cliente OAuth**
 3. Tipo: **Aplicativo da Web**
-4. Nome: ZapAgent
+4. Nome: Encaixe
 5. URIs de redirecionamento autorizados:
    - Desenvolvimento: `http://localhost:3000/auth/google-calendar/callback`
    - Producao: `https://seudominio.com/auth/google-calendar/callback`
