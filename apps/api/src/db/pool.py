@@ -1,16 +1,26 @@
 """asyncpg connection pool factory.
 
-A single pool is created at API startup and stored in `app.state.db_pool`.
-The Celery worker creates its own pool lazily (one per worker process).
+FastAPI side: a single pool is created at startup (lifespan) and stored
+in ``app.state.db_pool``. Lives for the process lifetime.
+
+Celery side: pools are created **per task**, inside the task's
+``asyncio.run()`` block, and closed when the task exits. Reusing a pool
+across ``asyncio.run`` calls crashes with ``Event loop is closed``
+because the pool's internal primitives are bound to the dead loop. See
+``checkpointer.py`` for the same hazard and the same fix.
 
 Usage in FastAPI:
     pool = request.app.state.db_pool
 
 Usage in Celery tasks:
-    pool = await get_worker_pool()
+    async with worker_pool_scope() as pool:
+        ...
 """
 
 from __future__ import annotations
+
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
 
 import asyncpg
 
@@ -19,14 +29,12 @@ from src.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Celery worker: one pool per process, created on first use.
-_worker_pool: asyncpg.Pool | None = None
-
 
 async def create_pool() -> asyncpg.Pool:
     """Create and return a new asyncpg pool.
 
-    Called once at FastAPI startup via the lifespan context manager.
+    Called by the FastAPI lifespan context (process-singleton) and by
+    each Celery task (task-scoped via :func:`worker_pool_scope`).
     """
     settings = get_settings()
     # asyncpg needs the plain postgres:// URL (not the SQLAlchemy +psycopg one).
@@ -43,9 +51,19 @@ async def create_pool() -> asyncpg.Pool:
     return pool
 
 
-async def get_worker_pool() -> asyncpg.Pool:
-    """Return the Celery worker pool, creating it on first call per process."""
-    global _worker_pool
-    if _worker_pool is None:
-        _worker_pool = await create_pool()
-    return _worker_pool
+@asynccontextmanager
+async def worker_pool_scope() -> AsyncIterator[asyncpg.Pool]:
+    """Yield a pool scoped to the current event loop, then close it.
+
+    Use this inside the ``_main`` of a Celery task so the pool's
+    lifetime matches the task's ``asyncio.run`` loop. Cleanup runs even
+    on exception via the context manager's ``finally``.
+    """
+    pool = await create_pool()
+    try:
+        yield pool
+    finally:
+        try:
+            await pool.close()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("db.pool.close_failed", error=str(exc))

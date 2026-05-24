@@ -63,7 +63,8 @@ async def _reindex_faq(pool: Any, faq_id: str, tenant_id: str, text: str) -> Non
         import voyageai  # noqa: PLC0415
 
         client = voyageai.AsyncClient(api_key=settings.voyage_api_key)
-        result = await client.embed(texts=[text], model=settings.voyage_model)
+        # 1024 matches faq_items.embedding VECTOR(1024); voyage-3-lite defaults to 512.
+        result = await client.embed(texts=[text], model=settings.voyage_model, output_dimension=1024)
         embedding = result.embeddings[0]
         vec_lit = "[" + ",".join(f"{x:.8f}" for x in embedding) + "]"
 

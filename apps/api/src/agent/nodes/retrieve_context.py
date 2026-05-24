@@ -46,7 +46,10 @@ async def _embed(text: str) -> list[float]:
 
     settings = get_settings()
     client = voyageai.AsyncClient(api_key=settings.voyage_api_key)
-    result = await client.embed(texts=[text], model=settings.voyage_model)
+    # output_dimension=1024 must match faq_items.embedding VECTOR(1024).
+    # voyage-3-lite defaults to 512; passing it explicitly keeps the schema
+    # contract whether voyage_model is voyage-3-lite, voyage-3, or future variants.
+    result = await client.embed(texts=[text], model=settings.voyage_model, output_dimension=1024)
     return result.embeddings[0]  # type: ignore[no-any-return]
 
 
@@ -120,8 +123,17 @@ async def retrieve_context(
     settings = get_settings()
     top_k = settings.agent_rag_top_k
 
-    configurable: dict[str, Any] = (config or {}).get("configurable", {})  # type: ignore[assignment]
-    pool: Any | None = configurable.get("db_pool")
+    # LangGraph's `configurable` slot drops our `db_pool` key (filtered by
+    # the framework before the node is invoked, observed empirically on
+    # 2026-05-24). Read the pool from a task-scoped contextvar instead;
+    # see src/agent/context.py for the rationale.
+    from ..context import get_db_pool  # noqa: PLC0415
+    pool: Any | None = get_db_pool()
+    # Backwards-compat: still honor a pool passed via LangGraph config
+    # if a future framework version re-enables it.
+    if pool is None:
+        configurable: dict[str, Any] = (config or {}).get("configurable", {})  # type: ignore[assignment]
+        pool = configurable.get("db_pool")
 
     if pool is None or not settings.voyage_api_key:
         reason = "no_pool" if pool is None else "no_voyage_key"

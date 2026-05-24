@@ -9,48 +9,51 @@ unacceptable for a paying customer mid-conversation.
 
 This module fills that gap.
 
-Two implementations
--------------------
-* **API path** (FastAPI request → in-process graph invocation, rare) —
-  uses the async saver. Not currently used; the path of record is the
-  worker.
-* **Worker path** (Celery task → graph invocation) — uses the async
-  saver too. Every Celery task opens its own ``asyncio.run()`` so the
-  saver lives for the duration of that loop. We keep a process-level
-  connection pool to amortize the TCP cost across tasks.
+Lifecycle: per-task, not process-singleton
+------------------------------------------
+Celery prefork workers run each task via ``asyncio.run(_main())``, which
+creates a fresh event loop per task and tears it down at exit. Any
+asyncio primitive (``Lock``, ``Pool``, ``Connection``) created in loop
+A and reused in loop B raises ``RuntimeError: ... is bound to a
+different event loop`` — a real production crash we hit on 2026-05-24.
+
+We therefore open the psycopg pool and the saver **inside each task**
+and close them in a ``finally`` block. The TCP-connect cost (~50 ms to
+Supabase pooler) is negligible compared to the multi-second LLM call
+that dominates each turn. A future migration to a persistent worker
+event loop (``--pool=gevent``, or a background-thread loop) would
+restore process-level pooling without the event-loop hazard.
 
 Why a separate psycopg pool (not the asyncpg one)
 -------------------------------------------------
 ``langgraph-checkpoint-postgres`` is built on top of ``psycopg`` (not
 ``asyncpg``). Trying to thread asyncpg connections through it requires
-adapter glue that buys us nothing — the cost of a second pool with a
-small ``max_size`` is negligible compared to the LLM calls dominating
-each request.
+adapter glue that buys us nothing.
 
 Idempotent setup
 ----------------
-The saver creates its own tables (``checkpoints``, ``checkpoint_blobs``,
-``checkpoint_writes``, ``checkpoint_migrations``) on first use. We call
-``setup()`` exactly once per process, guarded by a lock so concurrent
-Celery tasks don't race the first invocation.
+``saver.setup()`` creates its own tables (``checkpoints``,
+``checkpoint_blobs``, ``checkpoint_writes``, ``checkpoint_migrations``)
+on first use. ``IF NOT EXISTS`` makes repeat calls cheap, but we still
+prefer not to run the DDL every task — see :func:`get_async_postgres_saver`
+for the per-process ``_setup_done_for_dsn`` cache.
 """
 
 from __future__ import annotations
 
-import asyncio
-from typing import Any
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator
 
 from src.core.config import get_settings
 from src.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Process-level state. Lazy-initialized on first call; rest of the
-# process reuses the same saver+pool combination.
-_pool: Any = None  # psycopg AsyncConnectionPool when initialized
-_saver: Any = None  # AsyncPostgresSaver when initialized
-_setup_done: bool = False
-_init_lock = asyncio.Lock()
+# Setup-DDL guard. The saver's setup() runs CREATE TABLE IF NOT EXISTS
+# statements — safe to repeat, but cheap to skip after the first task in
+# the process has done it. Storing the DSN (not just a bool) avoids
+# accidentally skipping setup if the DSN is rotated mid-process.
+_setup_done_for_dsn: str | None = None
 
 
 def _psycopg_dsn() -> str:
@@ -65,66 +68,71 @@ def _psycopg_dsn() -> str:
     return dsn.replace("postgresql+psycopg://", "postgresql://")
 
 
-async def get_async_postgres_saver() -> Any:
-    """Return a process-singleton ``AsyncPostgresSaver``.
+@asynccontextmanager
+async def async_postgres_saver_scope() -> AsyncIterator[Any]:
+    """Yield a fresh ``AsyncPostgresSaver`` bound to the current event loop.
 
-    On first call, opens a small psycopg ``AsyncConnectionPool`` and
-    runs the saver's ``setup()`` so the checkpoint tables exist. Both
-    are idempotent — subsequent calls return the cached saver.
+    Opens a small psycopg ``AsyncConnectionPool`` for the duration of the
+    context and closes it on exit. Safe to call from any event loop —
+    including a fresh one inside ``asyncio.run`` — because no state
+    leaks across loops.
 
-    Raises:
-        ImportError: if ``langgraph-checkpoint-postgres`` is not
-            installed (it is pinned in pyproject; this would indicate a
-            broken environment, not a user error).
+    The DDL ``setup()`` runs only once per (process, DSN) tuple.
     """
-    global _pool, _saver, _setup_done
+    global _setup_done_for_dsn
 
-    if _saver is not None and _setup_done:
-        return _saver
+    # Lazy imports keep the module import side-effect-free.
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver  # noqa: PLC0415
+    from psycopg_pool import AsyncConnectionPool  # noqa: PLC0415
 
-    async with _init_lock:
-        if _saver is not None and _setup_done:
-            return _saver
-
-        # Lazy imports keep the module import side-effect-free, which
-        # matters for unit tests that build the graph with MemorySaver
-        # and never need psycopg at all.
-        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver  # noqa: PLC0415
-        from psycopg_pool import AsyncConnectionPool  # noqa: PLC0415
-
-        if _pool is None:
-            _pool = AsyncConnectionPool(
-                conninfo=_psycopg_dsn(),
-                min_size=1,
-                max_size=4,
-                # Saver opens short transactions; autocommit reduces
-                # locking surface and matches the saver's own assumptions
-                # in its ``from_conn_string`` factory.
-                kwargs={"autocommit": True, "prepare_threshold": 0},
-                open=False,
-            )
-            await _pool.open()
-            logger.info("checkpointer.pool_opened", min_size=1, max_size=4)
-
-        if _saver is None:
-            _saver = AsyncPostgresSaver(conn=_pool)
-
-        if not _setup_done:
-            await _saver.setup()
-            _setup_done = True
+    dsn = _psycopg_dsn()
+    pool = AsyncConnectionPool(
+        conninfo=dsn,
+        min_size=1,
+        max_size=4,
+        # Saver opens short transactions; autocommit reduces locking
+        # surface and matches the saver's own factory.
+        kwargs={"autocommit": True, "prepare_threshold": 0},
+        open=False,
+    )
+    await pool.open()
+    try:
+        saver = AsyncPostgresSaver(conn=pool)
+        if _setup_done_for_dsn != dsn:
+            await saver.setup()
+            _setup_done_for_dsn = dsn
             logger.info("checkpointer.setup_done")
-
-    return _saver
-
-
-async def close_async_postgres_saver() -> None:
-    """Tear down the saver and its pool — for graceful shutdown or tests."""
-    global _pool, _saver, _setup_done
-    if _pool is not None:
+        yield saver
+    finally:
         try:
-            await _pool.close()
+            await pool.close()
         except Exception as exc:  # noqa: BLE001
             logger.warning("checkpointer.pool_close_failed", error=str(exc))
-    _pool = None
-    _saver = None
-    _setup_done = False
+
+
+async def get_async_postgres_saver() -> Any:
+    """Deprecated process-singleton accessor.
+
+    Retained for callers that haven't migrated to
+    :func:`async_postgres_saver_scope`. Each call opens a *fresh* pool
+    and saver and never closes them — the loop's exit cleans up via GC.
+    Do **not** use from Celery tasks (use the context manager instead).
+    """
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver  # noqa: PLC0415
+    from psycopg_pool import AsyncConnectionPool  # noqa: PLC0415
+
+    global _setup_done_for_dsn
+    dsn = _psycopg_dsn()
+    pool = AsyncConnectionPool(
+        conninfo=dsn,
+        min_size=1,
+        max_size=4,
+        kwargs={"autocommit": True, "prepare_threshold": 0},
+        open=False,
+    )
+    await pool.open()
+    saver = AsyncPostgresSaver(conn=pool)
+    if _setup_done_for_dsn != dsn:
+        await saver.setup()
+        _setup_done_for_dsn = dsn
+    return saver
