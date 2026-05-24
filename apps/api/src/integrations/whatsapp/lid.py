@@ -30,10 +30,11 @@ from src.core.logging import get_logger
 logger = get_logger(__name__)
 
 _KEY_PREFIX = "lid_pn:"
-_client_singleton: aioredis.Redis | None = None
+# decode_responses=True below means values come back as str, not bytes.
+_client_singleton: aioredis.Redis[str] | None = None
 
 
-def _client() -> aioredis.Redis | None:
+def _client() -> aioredis.Redis[str] | None:
     global _client_singleton
     if _client_singleton is None:
         try:
@@ -43,7 +44,7 @@ def _client() -> aioredis.Redis | None:
                 decode_responses=True,
                 socket_connect_timeout=1,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("lid.redis_connect_failed", error=str(exc))
             return None
     return _client_singleton
@@ -58,7 +59,7 @@ async def resolve_lid_phone(message_id: str) -> str | None:
         return None
     try:
         return await client.get(_KEY_PREFIX + message_id)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("lid.redis_get_failed", message_id=message_id, error=str(exc))
         return None
 

@@ -31,7 +31,7 @@ import json
 import os
 import sys
 import time
-from typing import Iterator
+from collections.abc import Iterator
 
 import docker
 import redis

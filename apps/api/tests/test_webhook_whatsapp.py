@@ -227,7 +227,7 @@ def test_webhook_skips_non_text_message(client: TestClient) -> None:
 # ---------------------------------------------------------------------------
 
 def test_webhook_stores_qr_on_qrcode_event(app_client) -> None:
-    app, pool, c = app_client
+    _app, pool, c = app_client
     conn = _make_fresh_conn(pool)
 
     resp = c.post("/webhooks/whatsapp", json=QRCODE_BODY, headers=_token_headers())
@@ -253,7 +253,7 @@ def test_webhook_handles_qrcode_without_pool() -> None:
 # ---------------------------------------------------------------------------
 
 def test_webhook_marks_connected_on_open_state(app_client) -> None:
-    app, pool, c = app_client
+    _app, pool, c = app_client
     conn = _make_fresh_conn(pool)
 
     resp = c.post("/webhooks/whatsapp", json=CONNECTION_CONNECTED_BODY, headers=_token_headers())
@@ -265,7 +265,7 @@ def test_webhook_marks_connected_on_open_state(app_client) -> None:
 
 
 def test_webhook_marks_pending_on_close_state(app_client) -> None:
-    app, pool, c = app_client
+    _app, pool, c = app_client
     conn = _make_fresh_conn(pool)
 
     resp = c.post("/webhooks/whatsapp", json=CONNECTION_DISCONNECTED_BODY, headers=_token_headers())
@@ -281,7 +281,7 @@ def test_webhook_marks_pending_on_close_state(app_client) -> None:
 # ---------------------------------------------------------------------------
 
 def test_webhook_returns_tenant_none_when_not_found(app_client) -> None:
-    app, pool, c = app_client
+    _app, pool, c = app_client
     conn = _make_fresh_conn(pool)
     conn.fetchrow = AsyncMock(return_value=None)
 
@@ -292,7 +292,7 @@ def test_webhook_returns_tenant_none_when_not_found(app_client) -> None:
 
 
 def test_webhook_enqueues_celery_task_for_valid_message(app_client) -> None:
-    app, pool, c = app_client
+    _app, pool, c = app_client
     conn = _make_fresh_conn(pool)
     conn.fetchrow = AsyncMock(side_effect=[
         {"tenant_id": "tenant-uuid-001"},
@@ -341,7 +341,7 @@ def test_webhook_resolves_lid_phone_before_enqueue(app_client) -> None:
     phone, the Celery task must receive the resolved number, not the
     masked digits.
     """
-    app, pool, c = app_client
+    _app, pool, c = app_client
     conn = _make_fresh_conn(pool)
     conn.fetchrow = AsyncMock(side_effect=[
         {"tenant_id": "tenant-uuid-001"},
@@ -372,7 +372,7 @@ def test_webhook_falls_through_when_lid_resolution_misses(app_client) -> None:
     provider gave (so the inbound is still persisted and the gap shows
     up in logs).
     """
-    app, pool, c = app_client
+    _app, pool, c = app_client
     conn = _make_fresh_conn(pool)
     conn.fetchrow = AsyncMock(side_effect=[
         {"tenant_id": "tenant-uuid-001"},
@@ -401,7 +401,7 @@ def test_webhook_skips_lid_lookup_for_regular_phone(app_client) -> None:
     resolver MUST NOT be called for those — every webhook hit doing a
     Redis round trip is wasted latency for the common path.
     """
-    app, pool, c = app_client
+    _app, pool, c = app_client
     conn = _make_fresh_conn(pool)
     conn.fetchrow = AsyncMock(side_effect=[
         {"tenant_id": "tenant-uuid-001"},

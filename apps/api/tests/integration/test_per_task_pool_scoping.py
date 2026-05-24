@@ -31,18 +31,16 @@ import asyncio
 
 import pytest
 
-
 pytestmark = pytest.mark.integration
 
 
 async def _trivial_pool_use() -> int:
     """Open a worker_pool_scope, run SELECT 1, close it. Exercises every
     asyncio primitive that was previously leaking across loops."""
-    from src.db.pool import worker_pool_scope  # noqa: PLC0415
+    from src.db.pool import worker_pool_scope
 
-    async with worker_pool_scope() as pool:
-        async with pool.acquire() as conn:
-            value: int = await conn.fetchval("SELECT 1")
+    async with worker_pool_scope() as pool, pool.acquire() as conn:
+        value: int = await conn.fetchval("SELECT 1")
     return value
 
 
@@ -51,7 +49,7 @@ async def _trivial_saver_use() -> bool:
     after first task per process). The internal psycopg AsyncConnection-
     Pool is the primitive that crashed pre-fix.
     """
-    from src.agent.checkpointer import async_postgres_saver_scope  # noqa: PLC0415
+    from src.agent.checkpointer import async_postgres_saver_scope
 
     async with async_postgres_saver_scope() as saver:
         # Touching .conn forces the pool to be alive; we don't need a

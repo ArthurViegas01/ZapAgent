@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from src.sidecars.lid_resolver import iter_log_lines, parse_recv_line
 
-
 # A Baileys 'recv' for a text message — the one shape we *do* want to cache.
 TEXT_RECV = (
     '{"level":20,"time":1779645967794,"pid":268,"hostname":"e20f30faecfe",'
@@ -122,7 +121,7 @@ def test_iter_log_lines_handles_chunk_boundaries() -> None:
     Feed two chunks where one line spans the boundary and confirm the
     line buffer reassembles them correctly.
     """
-    chunks = [b'first line\nsecond ', b'half\nthird line\n']
+    chunks = [b"first line\nsecond ", b"half\nthird line\n"]
     out = list(iter_log_lines(iter(chunks)))
     assert out == [b"first line", b"second half", b"third line"]
 
