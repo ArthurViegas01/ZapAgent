@@ -1,4 +1,4 @@
-# ZapAgent — conteúdo para portfolio
+# Encaixe — conteúdo para portfolio
 
 Mesmo formato dos projetos atuais (Context RAG, Dataglass, GitHub Portfolio
 Intelligence, AI Component Generator). Inclui (1) card resumido, (2) case
@@ -15,7 +15,7 @@ ativas / Mensagens respondidas / Agendamentos 24h"). Se preferir algo mais
 visual, use a tela de Configurações que aparece nas suas screenshots.
 
 **Título:**
-ZapAgent
+Encaixe
 
 **Descrição (3 linhas, mesmo tom dos outros cards):**
 
@@ -45,7 +45,7 @@ Linha 3 (deploy/cloud): `Terraform` `Hetzner` `AWS Secrets` `Evolution API`
 ### Header
 
 **Tag:** SYSTEM DESIGN CASE STUDY
-**Título:** ZapAgent
+**Título:** Encaixe
 **Sub-tag:** AI / SaaS Multi-tenant
 
 **Descrição curta:**
