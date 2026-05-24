@@ -6,6 +6,68 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed (@lid resolver — production-portable architecture, 2026-05-24 late)
+The Docker-SDK sidecar approach landed earlier today works under
+docker-compose but cannot run on Railway, which does not expose a shared
+``/var/run/docker.sock`` to user services. Without this change, the @lid
+fix never reaches paying customers — Evolution there stays in passthrough
+mode and ``sendText`` for @lid contacts keeps returning ``400
+{"exists":false}``.
+
+The intercept now lives **inside** the Evolution container image. Same
+parser, different harness:
+
+- `apps/evolution/lid_pipe.py` — Python script. Runs Evolution as a child
+  subprocess (`/bin/bash -c ". deploy_database.sh && npm run start:prod"`,
+  the exact entrypoint captured via ``docker inspect``), mirrors the
+  child's combined stdout/stderr to the script's own stdout (so Railway's
+  log viewer still sees Evolution unchanged), and side-channels
+  ``(message_id, sender_pn)`` pairs into Redis as before. The script
+  becomes PID 1; SIGTERM / SIGINT are forwarded to Evolution so Railway's
+  graceful-shutdown handling keeps working. The parser is a byte-for-byte
+  copy of the canonical one in ``apps/api/src/sidecars/lid_parser.py`` —
+  the two files cannot share an import (separate Docker build contexts)
+  and the parser is small + stable, so duplication is cheaper than a
+  shared package.
+
+- `apps/evolution/Dockerfile` — extended to install ``python3`` and
+  ``py3-redis`` via ``apk`` (NOT pip; the base image's Python 3.12 has a
+  broken ``pyexpat`` shared library that breaks pip itself with
+  ``symbol not found: XML_SetAllocTrackerActivationThreshold``).
+  Overrides ``ENTRYPOINT`` to wrap the original command through
+  ``lid_pipe.py``. The Baileys 6.7.9 pin from earlier is unchanged.
+
+- `apps/api/src/sidecars/lid_parser.py` (new) — extracted from the now-
+  deleted ``lid_resolver.py``. Pure ``parse_recv_line`` +
+  ``iter_log_lines``, no Docker SDK, no runtime daemon. The 13 parser
+  unit tests in ``tests/sidecars/test_lid_parser.py`` exercise this
+  module and continue to pass unchanged.
+
+- `apps/api/src/sidecars/lid_resolver.py` — **deleted**. The Docker-SDK
+  daemon was a dev-only artifact and is now redundant with the embedded
+  pipe. Anything that wanted to import it has been migrated to the new
+  ``lid_parser`` module.
+
+- `apps/api/pyproject.toml` — dropped ``docker>=7.1.0`` (no longer
+  needed; was a runtime dep solely for the deleted sidecar).
+
+- `docker-compose.yml` — removed the ``lid-resolver`` service entirely
+  (now embedded in Evolution). Added ``REDIS_URL=redis://redis:6379/0``
+  and ``LID_TTL_SECONDS=86400`` to the Evolution service env so
+  ``lid_pipe.py`` knows where to cache.
+
+- `infra/terraform/environments/railway/main.tf` — added ``REDIS_URL =
+  "${railway_plugin.redis.url}/0"`` and ``LID_TTL_SECONDS = "86400"`` to
+  ``railway_variable_collection.evolution_vars``. Without these the
+  script falls into passthrough mode (Evolution still works but @lid
+  replies fail).
+
+Runtime verified locally: ``docker compose up -d --force-recreate
+evolution`` shows ``PID 1 = python3 /usr/local/bin/lid_pipe.py`` wrapping
+``node dist/main`` (PID 269), ``[lid_pipe] started; mirroring …`` on
+stderr, and Evolution's normal startup logs continue to flow through to
+the Docker log viewer.
+
 ### Added (production-blocker close-out, 2026-05-24 EOD)
 The two known issues recorded after the morning e2e test are closed.
 Counts after this batch: **102/102 unit, 4/5 integration** (the 5th

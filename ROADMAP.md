@@ -10,16 +10,18 @@ top, the closer to ready.
 - [x] Demo flow without external WhatsApp gateway (`make demo`)
 - [x] LangGraph PostgresSaver wired to the live pool — durable
       checkpoints, per-task scope (event-loop safe under Celery prefork)
-- [x] **`@lid` outbound reply path**. Sidecar tails Evolution stdout
-      via the Docker socket, parses Baileys `recv` lines for
-      `(message_id, sender_pn)`, caches at `lid_pn:{message_id}` in
-      Redis with a 24 h TTL. Webhook handler looks up the cache when
-      the inbound JID ends in `@lid` and patches `contact_phone` before
-      DB write / Celery dispatch. Cache miss falls through with a
-      warning log so the inbound is still persisted. Lives at
-      `apps/api/src/sidecars/lid_resolver.py` +
-      `apps/api/src/integrations/whatsapp/lid.py`. Docker-compose
-      service `lid-resolver`. (2026-05-24 EOD)
+- [x] **`@lid` outbound reply path**. Python wrapper (`apps/evolution/
+      lid_pipe.py`) runs as PID 1 inside the Evolution container, spawns
+      Evolution as a subprocess, mirrors its stdout, and side-channels
+      Baileys `(message_id, sender_pn)` pairs into Redis as
+      `lid_pn:{message_id}` (24 h TTL). API webhook looks up the cache
+      when the inbound JID ends in `@lid` and patches `contact_phone`
+      before DB write / Celery dispatch. Cache miss falls through with a
+      warning log. Works in both docker-compose AND Railway (the earlier
+      Docker-SDK sidecar at `apps/api/src/sidecars/` only worked locally
+      because Railway services do not share `/var/run/docker.sock` —
+      removed in the refactor). Read side stays at
+      `apps/api/src/integrations/whatsapp/lid.py`. (2026-05-24 late)
 - [x] **Per-intent confidence rules in `check_confidence`**.
       `GREETING`, `OPT_OUT`, and slot-incomplete `SCHEDULING` now early-
       return with `confidence=1.0, next_action="respond"`;
