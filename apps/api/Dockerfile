@@ -1,6 +1,6 @@
 # Multi-stage Dockerfile for the FastAPI service.
 # `dev` stage = hot-reload uvicorn used by docker-compose.
-# `prod` stage = slim runtime image used by Terraform-provisioned VPS.
+# `prod` stage = slim runtime image used by Railway.
 
 FROM python:3.11-slim AS base
 
@@ -12,12 +12,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN apt-get update \
- && apt-get install -y --no-install-recommends \
-        build-essential \
-        curl \
-        libpq-dev \
- && rm -rf /var/lib/apt/lists/*
+# No apt install needed: every pip dep we use has prebuilt wheels for
+# linux/amd64 (psycopg[binary], asyncpg, cryptography, Pillow, etc).
+# An earlier version installed build-essential + libpq-dev defensively;
+# that ~200MB layer was OOM-killed by Railway's builder
+# ("runc run failed: container process is already dead" at base step 3/5
+# on 2026-05-25). Stripping it both fixes the build there and shrinks the
+# image. If a future dep ever needs to compile from source, add a
+# `RUN apt-get update && apt-get install -y --no-install-recommends \
+# build-essential libpq-dev && rm -rf /var/lib/apt/lists/*` back here.
 
 COPY pyproject.toml ./
 COPY README.md ./README.md
