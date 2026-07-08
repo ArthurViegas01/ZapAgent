@@ -20,6 +20,7 @@ gives admin access to every instance).
 
 from __future__ import annotations
 
+import hmac
 from typing import Any
 
 import httpx
@@ -209,9 +210,12 @@ class EvolutionProvider(WhatsAppProvider):
     # -- webhook auth ------------------------------------------------------
 
     def verify_webhook_auth(self, headers: dict[str, str]) -> bool:
+        # ZAP-009: fail closed. An unset token means the webhook is
+        # misconfigured, not open to the world, so reject rather than accept.
         if not self._webhook_token:
-            return True  # auth disabled (dev/test mode)
+            return False
         # Header names are case-insensitive at the HTTP layer; FastAPI
         # normalizes via Headers but pass-through dicts may not.
         token = headers.get("token") or headers.get("Token") or headers.get("TOKEN") or ""
-        return token == self._webhook_token
+        # Constant-time comparison avoids leaking the token via timing.
+        return hmac.compare_digest(token, self._webhook_token)

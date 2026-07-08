@@ -21,6 +21,7 @@ import asyncpg
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
+from src.core.agent_throttle import within_agent_quota
 from src.core.config import get_settings
 from src.core.logging import get_logger
 from src.integrations.whatsapp import get_whatsapp_provider
@@ -30,6 +31,10 @@ from src.worker.tasks import process_whatsapp_message
 logger = get_logger(__name__)
 router = APIRouter(tags=["webhooks"])
 settings = get_settings()
+
+# ZAP-007 / MISS-002: cap the webhook body. Evolution events are a few KB;
+# anything above this is rejected before we buffer or parse it.
+_MAX_WEBHOOK_BODY_BYTES = 256 * 1024
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +162,32 @@ async def receive_whatsapp_event(request: Request, event_path: str = "") -> JSON
     pool = getattr(request.app.state, "db_pool", None)
     provider = get_whatsapp_provider()
 
+    # MISS-002: authenticate BEFORE reading or parsing the body, so an
+    # unauthenticated caller cannot make us buffer and deserialize arbitrary
+    # JSON on the most exposed public endpoint.
+    if not provider.verify_webhook_auth(dict(request.headers)):
+        logger.warning("webhook.auth_failed")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token")
+
+    # ZAP-007: reject oversized payloads by declared length before buffering.
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            declared = int(content_length)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="invalid content-length"
+            ) from exc
+        if declared > _MAX_WEBHOOK_BODY_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="payload too large"
+            )
+
     raw = await request.body()
+    if len(raw) > _MAX_WEBHOOK_BODY_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="payload too large"
+        )
     try:
         parsed: Any = json.loads(raw) if raw else {}
     except json.JSONDecodeError as exc:
@@ -166,10 +196,6 @@ async def receive_whatsapp_event(request: Request, event_path: str = "") -> JSON
     body = parsed if isinstance(parsed, dict) else {}
     raw_event = str(body.get("event", ""))
     instance_name = str(body.get("instance", ""))
-
-    if not provider.verify_webhook_auth(dict(request.headers)):
-        logger.warning("webhook.auth_failed", evo_event=raw_event, instance=instance_name)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token")
 
     event_type = provider.parse_event_type(body)
 
@@ -324,12 +350,24 @@ async def receive_whatsapp_event(request: Request, event_path: str = "") -> JSON
     # Honor opt-out without re-running the agent.
     async with pool.acquire() as conn:
         opted_row = await conn.fetchrow(
-            "SELECT opted_out FROM conversations WHERE id = $1::uuid",
+            # MISS-001: scope the read by tenant_id, never by conversation id alone.
+            "SELECT opted_out FROM conversations WHERE id = $1::uuid AND tenant_id = $2::uuid",
             conversation_id,
+            tenant_id,
         )
     if opted_row and opted_row["opted_out"]:
         logger.info("webhook.opted_out_skipped", conversation_id=conversation_id)
         return JSONResponse({"ok": True, "skipped": "opted_out"})
+
+    # ZAP-007: per-contact daily cap on agent turns, so a single contact cannot
+    # burn a tenant's LLM budget. Fails open when Redis is unavailable.
+    if not await within_agent_quota(tenant_id, inbound.contact_phone):
+        logger.warning(
+            "webhook.agent_quota_exceeded",
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+        )
+        return JSONResponse({"ok": True, "skipped": "agent_quota"})
 
     # Subscription gate: trial expired / suspended tenants get a polite
     # pt-BR message and skip the Celery dispatch. The agent never sees

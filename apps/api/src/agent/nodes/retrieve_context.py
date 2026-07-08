@@ -90,15 +90,19 @@ async def _query_faq(
 
 async def _query_history(
     pool: Any,
+    tenant_id: str,
     conversation_id: str,
 ) -> list[dict[str, Any]]:
     """Fetch the last 10 messages, returned in chronological order."""
     async with pool.acquire() as conn:
         rows = await conn.fetch(
+            # MISS-001: scope by tenant_id, not by conversation id alone.
             "SELECT role, content FROM messages"
             " WHERE conversation_id = $1::uuid"
+            "   AND tenant_id = $2::uuid"
             " ORDER BY created_at DESC LIMIT 10",
             conversation_id,
+            tenant_id,
         )
     # Rows arrive newest-first; reverse to oldest-first for the LLM prompt.
     return [{"role": row["role"], "content": row["content"]} for row in reversed(rows)]
@@ -152,7 +156,7 @@ async def retrieve_context(
     vec_lit = _vec_literal(embedding)
 
     matches = await _query_faq(pool, tenant_id, vec_lit, top_k)
-    history = await _query_history(pool, conversation_id)
+    history = await _query_history(pool, tenant_id, conversation_id)
 
     logger.info(
         "retrieve_context.done",
