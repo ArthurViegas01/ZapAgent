@@ -1,6 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { createServerClient } from "@supabase/ssr";
-import { cookies } from "next/headers";
+
+import { createClient } from "../../../../lib/supabase/server";
+import { createServiceClient } from "../../../../lib/supabase/service";
+import { encryptSecret, encryptionConfigured } from "../../../../lib/crypto";
 
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 
@@ -14,7 +16,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(`${origin}/login?error=gcal_denied`);
   }
 
-  // Decode state
+  // Decode state (carries the target tenant; membership is verified below).
   let tenantId = "";
   let tenantSlug = "";
   try {
@@ -23,6 +25,29 @@ export async function GET(request: NextRequest) {
     tenantSlug = decoded.tenantSlug;
   } catch {
     return NextResponse.redirect(`${origin}/login?error=gcal_state_invalid`);
+  }
+
+  // ZAP-003: require an authenticated session and verify the user actually
+  // belongs to the tenant named in state, BEFORE touching any secrets. Without
+  // this, anyone could POST a crafted state and write OAuth tokens into any
+  // tenant using the service role.
+  const supabase = createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    return NextResponse.redirect(`${origin}/login?error=gcal_unauthorized`);
+  }
+
+  const service = createServiceClient();
+  const { data: membership } = await service
+    .from("users")
+    .select("role")
+    .eq("auth_user_id", user.id)
+    .eq("tenant_id", tenantId)
+    .maybeSingle();
+  if (!membership) {
+    return NextResponse.redirect(`${origin}/login?error=gcal_forbidden`);
   }
 
   const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID ?? "";
@@ -67,29 +92,27 @@ export async function GET(request: NextRequest) {
       const calData = await calRes.json();
       calendarId = calData.id ?? "primary";
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 
-  // Persist to DB using service role
-  const cookieStore = cookies();
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { cookies: { getAll: () => [], setAll: () => {} } }
-  );
+  // ZAP-006: encrypt secrets at rest when a key is configured. Stored as
+  // {"enc": "<blob>"} so the Python read path can tell encrypted from legacy.
+  const secretsColumn = encryptionConfigured()
+    ? { enc: encryptSecret(JSON.stringify(secrets)) }
+    : secrets;
 
-  await supabase.from("integrations").upsert(
+  await service.from("integrations").upsert(
     {
       tenant_id: tenantId,
       kind: "google_calendar",
       external_id: calendarId,
       status: "connected",
       config: {},
-      secrets,
+      secrets: secretsColumn,
     },
-    { onConflict: "tenant_id,kind,external_id" }
+    { onConflict: "tenant_id,kind,external_id" },
   );
-
-  void cookieStore; // suppress unused warning
 
   return NextResponse.redirect(`${origin}/${tenantSlug}/integrations?gcal=connected`);
 }

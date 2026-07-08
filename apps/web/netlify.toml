@@ -10,6 +10,20 @@
 [[plugins]]
   package = "@netlify/plugin-nextjs"
 
+# ZAP-011: security headers. The CSP is intentionally minimal (frame-ancestors,
+# object-src, base-uri) so it hardens against clickjacking without breaking
+# Next.js hydration or the Supabase client, which need inline scripts and
+# cross-origin connections. X-Frame-Options backs up frame-ancestors on older
+# browsers.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Strict-Transport-Security = "max-age=63072000; includeSubDomains; preload"
+    Content-Security-Policy = "frame-ancestors 'none'; object-src 'none'; base-uri 'self'"
+
 # Redirect all unmatched routes to Next.js (handled by plugin, but explicit here).
 [[redirects]]
   from   = "/*"
