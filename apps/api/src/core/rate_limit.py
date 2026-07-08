@@ -39,6 +39,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .logging import get_logger
+from .security import verify_supabase_jwt_local
 
 logger = get_logger(__name__)
 
@@ -63,17 +64,21 @@ _BREAKER_COOLDOWN_SECONDS = 30.0
 
 
 def _extract_tenant_from_bearer(authorization: str) -> str | None:
-    """Quick unverified claim extraction — rate key only, not auth."""
+    """Extract a VERIFIED tenant id for the rate-limit key (ZAP-008).
+
+    Only returns a tenant when the JWT signature and expiry check out, so a
+    forged token cannot poison a victim's bucket or mint a fresh higher-limit
+    bucket to evade the per-IP limit. When local verification is unavailable
+    (no JWT secret configured) this returns None and the caller falls back to
+    the stricter per-IP limit.
+    """
     if not authorization.startswith("Bearer "):
         return None
     token = authorization.removeprefix("Bearer ")
-    try:
-        from jose import jwt
-
-        claims = jwt.get_unverified_claims(token)
-        return claims.get("app_metadata", {}).get("tenant_id") or claims.get("sub") or None
-    except Exception:
+    claims = verify_supabase_jwt_local(token)
+    if not claims:
         return None
+    return claims.get("app_metadata", {}).get("tenant_id") or claims.get("sub") or None
 
 
 def _client_ip(request: Request) -> str:
