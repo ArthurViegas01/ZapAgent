@@ -10,7 +10,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, PostgresDsn, RedisDsn
+from pydantic import Field, PostgresDsn, RedisDsn, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -46,6 +46,14 @@ class Settings(BaseSettings):
     supabase_service_role_key: str = ""
     supabase_jwt_secret: str = ""
 
+    # -- Security ----------------------------------------------------------
+    # Comma-separated list of allowed browser origins for CORS (ZAP-012).
+    # Applies in every environment; there is no wildcard fallback.
+    cors_allowed_origins: str = "http://localhost:3000"
+    # Key used to encrypt integration secrets at rest (ZAP-006). Derived via
+    # SHA-256, so any strong random string works (e.g. `openssl rand -hex 32`).
+    app_encryption_key: str = ""
+
     # -- Redis / Celery ----------------------------------------------------
     redis_url: RedisDsn = Field(default="redis://redis:6379/0")
     celery_broker_url: RedisDsn = Field(default="redis://redis:6379/1")
@@ -75,8 +83,8 @@ class Settings(BaseSettings):
 
     # -- Evolution API (when whatsapp_provider == "evolution") -----------
     evolution_api_url: str = "http://evolution:8080"
-    evolution_api_key: str = "changeme"
-    evolution_webhook_token: str = "changeme"
+    evolution_api_key: str = ""
+    evolution_webhook_token: str = ""
     evolution_webhook_base_url: str = "http://api:8000/webhooks/whatsapp"
 
     # -- Google Calendar --------------------------------------------------
@@ -107,6 +115,25 @@ class Settings(BaseSettings):
     @property
     def is_test(self) -> bool:
         return self.environment == "test"
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [o.strip() for o in self.cors_allowed_origins.split(",") if o.strip()]
+
+    @model_validator(mode="after")
+    def _require_production_secrets(self) -> "Settings":
+        """Fail fast in production if security-critical secrets are unset (ZAP-009)."""
+        if self.environment == "production":
+            if self.whatsapp_provider == "evolution" and (
+                not self.evolution_webhook_token
+                or self.evolution_webhook_token == "changeme"
+            ):
+                raise ValueError(
+                    "EVOLUTION_WEBHOOK_TOKEN must be set to a strong value in production."
+                )
+            if not self.supabase_jwt_secret:
+                raise ValueError("SUPABASE_JWT_SECRET must be set in production.")
+        return self
 
 
 @lru_cache(maxsize=1)
