@@ -88,10 +88,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
 
-    origins = ["*"] if not settings.is_production else []
+    # ZAP-012: explicit origin allowlist in every environment (from
+    # CORS_ALLOWED_ORIGINS). Never reflect an arbitrary origin with credentials.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=origins,
+        allow_origins=settings.cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
