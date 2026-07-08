@@ -11,6 +11,7 @@ Usage:
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import NamedTuple
@@ -21,6 +22,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from ...core.config import get_settings
 from ...core.logging import get_logger
+from ...core.security import verify_supabase_jwt_local
 
 logger = get_logger(__name__)
 _bearer = HTTPBearer(auto_error=False)
@@ -72,20 +74,6 @@ async def _verify_token_via_supabase_api(token: str) -> dict | None:
     return None
 
 
-def _decode_jwt_unverified(token: str) -> dict | None:
-    """Extract claims from a JWT without verifying the signature.
-
-    Used as a fast path when the local secret is known-good, or as a
-    last-resort after Supabase API verification already confirmed the token.
-    """
-    try:
-        from jose import jwt
-
-        return jwt.get_unverified_claims(token)
-    except Exception:
-        return None
-
-
 # ---------------------------------------------------------------------------
 # Tenant context
 # ---------------------------------------------------------------------------
@@ -101,7 +89,10 @@ class TenantContext(NamedTuple):
     async def conn(self) -> AsyncIterator[asyncpg.Connection]:
         """Acquire a connection with RLS tenant_id pre-set."""
         async with self.pool.acquire() as connection, connection.transaction():
-            await connection.execute(f"SET LOCAL app.tenant_id = '{self.tenant_id}'")
+            # ZAP-001: parametrized set_config, never interpolate tenant_id into SQL.
+            await connection.execute(
+                "SELECT set_config('app.tenant_id', $1, true)", self.tenant_id
+            )
             yield connection
 
 
@@ -134,19 +125,21 @@ async def require_tenant(
     token = credentials.credentials
     token_len = len(token)
 
-    # Primary: verify via Supabase API (handles all key/secret formats).
-    verified_via = "supabase_api"
-    claims = await _verify_token_via_supabase_api(token)
-
-    # Fallback: decode without signature check if Supabase API is unreachable.
-    if claims is None:
-        verified_via = "unverified_fallback"
-        logger.warning("jwt.using_unverified_fallback", path=path, token_len=token_len)
-        claims = _decode_jwt_unverified(token)
+    # ZAP-002: fail-closed verification. When a local JWT secret is configured
+    # we verify the signature + expiry locally (fast, no network). Otherwise we
+    # defer to Supabase's authoritative /auth/v1/user endpoint. There is no
+    # unverified-claims fallback: a token that fails verification is rejected.
+    settings = get_settings()
+    if settings.supabase_jwt_secret:
+        verified_via = "local_hs256"
+        claims = verify_supabase_jwt_local(token)
+    else:
+        verified_via = "supabase_api"
+        claims = await _verify_token_via_supabase_api(token)
 
     if not claims:
         logger.warning(
-            "jwt.claims_empty",
+            "jwt.verification_failed",
             path=path,
             verified_via=verified_via,
             token_len=token_len,
@@ -181,6 +174,17 @@ async def require_tenant(
             detail="tenant_id not found in token or URL.",
         )
 
+    # ZAP-001: validate/normalize tenant_id as a UUID before it ever reaches
+    # the database, so an injection payload dies here as a 400.
+    try:
+        tenant_id = str(uuid.UUID(str(tenant_id)))
+    except (ValueError, TypeError) as exc:
+        logger.warning("jwt.tenant_id_invalid", path=path)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid tenant_id.",
+        ) from exc
+
     pool: asyncpg.Pool | None = getattr(request.app.state, "db_pool", None)
     if pool is None:
         logger.error("jwt.db_pool_unavailable", path=path)
@@ -194,7 +198,8 @@ async def require_tenant(
     # (tenant_id = current_tenant_id()) can see the row.
     try:
         async with pool.acquire() as conn, conn.transaction():
-            await conn.execute(f"SET LOCAL app.tenant_id = '{tenant_id}'")
+            # ZAP-001: parametrized set_config, never interpolate tenant_id.
+            await conn.execute("SELECT set_config('app.tenant_id', $1, true)", tenant_id)
             row = await conn.fetchrow(
                 """
                     SELECT u.role
