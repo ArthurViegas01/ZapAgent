@@ -23,6 +23,7 @@ from langchain_core.runnables import RunnableConfig
 
 from ...core.config import get_settings
 from ...core.logging import get_logger
+from ...core.security import decrypt_secret, encrypt_secret, encryption_configured
 from ..state import AgentState, AppointmentDraft
 
 logger = get_logger(__name__)
@@ -48,6 +49,30 @@ def _placeholder_draft(state: AgentState) -> AppointmentDraft:
     )
 
 
+def _decode_secrets(raw: Any) -> dict:
+    """Return the plaintext secrets dict.
+
+    ZAP-006: decrypts the ``{"enc": "<blob>"}`` wrapper when present; legacy
+    plaintext rows (and unencrypted deployments) pass through unchanged.
+    """
+    if not raw:
+        return {}
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            return {}
+    if not isinstance(raw, dict):
+        return {}
+    if "enc" in raw:
+        try:
+            return json.loads(decrypt_secret(raw["enc"]))
+        except Exception:
+            logger.warning("schedule_appointment.secrets_decrypt_failed")
+            return {}
+    return raw
+
+
 async def _load_gcal_integration(pool: Any, tenant_id: str) -> dict | None:
     """Return the google_calendar integration row or None."""
     async with pool.acquire() as conn:
@@ -64,7 +89,7 @@ async def _load_gcal_integration(pool: Any, tenant_id: str) -> dict | None:
         "id": row["id"],
         "calendar_id": row["external_id"] or "primary",
         "config": row["config"] or {},
-        "secrets": row["secrets"] or {},
+        "secrets": _decode_secrets(row["secrets"]),
     }
 
 
@@ -103,12 +128,17 @@ async def _refresh_token_if_needed(
     secrets["access_token"] = new_access
     secrets["expires_at"] = new_expires
 
-    # Persist updated token
+    # Persist updated token. ZAP-006: re-encrypt on write-back when configured.
+    secrets_column = (
+        json.dumps({"enc": encrypt_secret(json.dumps(secrets))})
+        if encryption_configured()
+        else json.dumps(secrets)
+    )
     async with pool.acquire() as conn:
         await conn.execute(
             "UPDATE integrations SET secrets = $1::jsonb, last_synced_at = NOW() "
             "WHERE id = $2::uuid",
-            json.dumps(secrets),
+            secrets_column,
             integration_id,
         )
 

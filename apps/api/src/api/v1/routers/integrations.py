@@ -22,6 +22,7 @@ from pydantic import BaseModel
 
 from ....core.config import get_settings
 from ....core.logging import get_logger
+from ....core.security import encrypt_secret, encryption_configured
 from ....integrations.whatsapp import get_whatsapp_provider
 from ..dependencies import TenantContext, require_owner_or_admin, require_tenant
 
@@ -338,6 +339,13 @@ async def google_calendar_oauth_callback(
     except Exception:
         pass
 
+    # ZAP-006: encrypt secrets at rest when a key is configured. Stored as
+    # {"enc": "<blob>"} so the read path can tell encrypted from legacy plaintext.
+    secrets_column = (
+        _json.dumps({"enc": encrypt_secret(_json.dumps(secrets_data))})
+        if encryption_configured()
+        else _json.dumps(secrets_data)
+    )
     async with ctx.conn() as conn:
         await conn.execute(
             """
@@ -348,7 +356,7 @@ async def google_calendar_oauth_callback(
             """,
             ctx.tenant_id,
             calendar_id,
-            _json.dumps(secrets_data),
+            secrets_column,
         )
 
     logger.info("integrations.gcal_connected", tenant_id=ctx.tenant_id, calendar_id=calendar_id)
